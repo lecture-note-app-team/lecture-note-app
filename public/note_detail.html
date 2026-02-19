@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ノート詳細</title>
+  <link rel="stylesheet" href="./style.css?v=4" />
+  <style>
+    /* 追加の見た目だけ（必要ならstyle.cssへ移動OK） */
+    .md h1, .md h2, .md h3 { margin: 14px 0 8px; }
+    .md ul { padding-left: 22px; }
+    .md li { margin: 4px 0; }
+    .md code { background: #f0f0f0; padding: 2px 4px; border-radius: 6px; }
+    .row2 { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .small { color:#555; font-size:14px; }
+  </style>
+</head>
+<body>
+  <div class="row2" style="margin:10px 0;">
+    <a href="/" id="backLink">← 戻る</a>
+  </div>
+
+  <h1 id="title"></h1>
+  <div class="meta" id="meta"></div>
+
+  <div class="card">
+    <h2>ノート本文</h2>
+    <div id="content" class="md"></div>
+  </div>
+
+  <div class="card">
+    <h2>元のMarkdown</h2>
+    <pre id="md"></pre>
+  </div>
+
+  <div class="card">
+    <h2>クイズ（本文から自動生成）</h2>
+
+    <div class="row2" style="margin: 8px 0;">
+      <button id="btnGenQuiz" type="button">クイズを生成（作者のみ）</button>
+      <button id="btnReloadQuiz" type="button">更新</button>
+      <span class="small">※ノートが公開ならクイズも同じ範囲で公開</span>
+    </div>
+
+    <div id="quizList" class="small"></div>
+  </div>
+
+  <!-- marked（Markdown→HTML）とDOMPurify（XSS対策） -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+
+  <script>
+    async function api(path, options) {
+      const res = await fetch(path, options);
+      const text = await res.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch {}
+
+      if (!res.ok) {
+        const msg = data?.detail || data?.message || text || "API error";
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function loadQuizzes(noteId) {
+      const list = document.getElementById("quizList");
+      list.textContent = "読み込み中...";
+
+      const quizzes = await api(`/api/notes/${noteId}/quizzes`);
+      if (!quizzes.length) {
+        list.textContent = "クイズはまだありません（作者が生成できます）。";
+        return;
+      }
+
+      list.innerHTML = quizzes.map((q, i) => {
+        const ans = q.answer ? q.answer : "（未記入）";
+        return `
+          <div style="border:1px solid #eee; border-radius:10px; padding:10px; margin:10px 0;">
+            <div><strong>Q${i+1}.</strong> ${escapeHtml(q.question)}</div>
+            <div style="margin-top:6px; color:#555;"><strong>A.</strong> ${escapeHtml(ans)}</div>
+            <div style="margin-top:6px; color:#888; font-size:12px;">type: ${escapeHtml(q.type)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    const params = new URLSearchParams(location.search);
+    const id = params.get("id");
+    const from = params.get("from"); // 戻り先を渡したい場合に使う
+
+    if (!id) {
+      document.body.innerHTML = "<p>id がありません</p>";
+      throw new Error("missing id");
+    }
+
+    if (from) {
+      document.getElementById("backLink").setAttribute("href", from);
+    }
+
+    (async () => {
+      const note = await api("/api/notes/" + id);
+
+      document.getElementById("title").textContent = note.title || "(no title)";
+
+      const parts = [note.course_name, note.lecture_no, note.lecture_date].filter(Boolean);
+      let meta = parts.join(" / ");
+      if (note.author_name) meta += ` / 投稿：${note.author_name}`;
+      document.getElementById("meta").textContent = meta;
+
+      document.getElementById("md").textContent = note.body_md || "";
+
+      const html = marked.parse(note.body_md || "");
+      const safe = DOMPurify.sanitize(html);
+      document.getElementById("content").innerHTML = safe;
+
+      await loadQuizzes(id);
+
+      document.getElementById("btnReloadQuiz").addEventListener("click", () => loadQuizzes(id));
+
+      document.getElementById("btnGenQuiz").addEventListener("click", async () => {
+        try {
+          await api(`/api/notes/${id}/quizzes/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "replace", engine: "ai" })
+          });
+          await loadQuizzes(id);
+          alert("クイズを生成しました！");
+        } catch (e) {
+          alert("生成できません： " + e.message);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

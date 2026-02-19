@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>講義ノートメーカー</title>
+  <link rel="stylesheet" href="./style.css?v=4" />
+  <style>
+    .small { color:#555; font-size:14px; }
+    .hint { margin-top:6px; }
+    .row2 { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .inline { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+  <div class="row2" style="justify-content:space-between; margin:10px 0 14px;">
+    <h1 style="margin:0;">講義ノートメーカー</h1>
+    <div class="row2">
+      <button onclick="location.href='/login.html'">ログイン / 登録</button>
+      <button onclick="location.href='/mypage.html'">マイページ</button>
+    </div>
+  </div>
+
+  <!-- 投稿（保存） -->
+  <div class="card">
+    <div class="row2" style="justify-content:space-between; margin-bottom:8px;">
+      <h2 style="margin:0;">新規ノート（投稿）</h2>
+    </div>
+
+    <!-- ★投稿先（コミュニティ） -->
+    <label>投稿先（コミュニティ）</label>
+    <div class="row2">
+      <select id="community_id">
+        <option value="" selected>（未選択：大学公開/個人ノートとして投稿）</option>
+      </select>
+      <button id="btnReloadCommunities" type="button">コミュ更新</button>
+    </div>
+    <div id="communityHelp" class="small hint">
+      ※コミュニティを選ぶと「所属メンバーのみ閲覧」になります。公開ノート一覧には出ません。
+    </div>
+
+    <label>大学名または学部名、コミュニティ名（公開先）</label>
+    <input id="university_name" placeholder="例：長崎大学" />
+
+    <label>投稿者名（任意）</label>
+    <input id="author_name" placeholder="匿名でもOK" />
+
+    <label>授業名</label>
+    <input id="course_name" placeholder="例：経済学入門" />
+
+    <div class="grid">
+      <div>
+        <label>回（第◯回）</label>
+        <input id="lecture_no" placeholder="例：第3回" />
+      </div>
+      <div>
+        <label>日付</label>
+        <input id="lecture_date" type="date" />
+      </div>
+      <div>
+        <label>タイトル</label>
+        <input id="title" placeholder="例：需要と供給" />
+      </div>
+    </div>
+
+    <label>本文（メモ）</label>
+    <textarea id="body_raw" placeholder="例：
+⭐️ 需要が増えると価格が上がる
+用語: 需要曲線 = 価格と需要量の関係
+？ 供給曲線の傾きは何で決まる？
+TODO: 次回までにレポートテーマ決める
+"></textarea>
+
+    <label>公開設定</label>
+    <select id="visibility">
+      <option value="public" selected>公開（大学の一覧に表示）</option>
+      <option value="private">非公開（マイページだけ）</option>
+    </select>
+    <div id="visibilityHint" class="small hint"></div>
+
+    <div class="row2" style="margin-top:10px;">
+      <button id="btnPreview">プレビュー</button>
+      <button id="btnSave">保存</button>
+
+      <label class="inline small" style="margin-left:auto;">
+        <input type="checkbox" id="auto_quiz" checked />
+        保存後にクイズを自動生成（おすすめ）
+      </label>
+    </div>
+
+    <div class="small hint">
+      ※ `用語:` / `？` / `⭐️` を入れるとクイズの質が上がります。
+    </div>
+
+    <h3>プレビュー（Markdown）</h3>
+    <pre id="preview"></pre>
+  </div>
+
+  <!-- 一覧（大学名で検索） -->
+  <div class="card">
+    <div class="row2" style="justify-content:space-between; margin-bottom:8px;">
+      <h2 style="margin:0;">公開ノート一覧</h2>
+    </div>
+
+    <label>コミュニティ名で検索</label>
+    <div class="row">
+      <input id="university_search" placeholder="例：長崎大学" />
+      <button id="btnSearch" style="width: 180px;">検索</button>
+    </div>
+
+    <label>授業名で絞り込み（任意）</label>
+    <input id="course_search" placeholder="例：経済学入門 / ミクロ" />
+
+    <div id="list"></div>
+  </div>
+
+  <script src="./main.js?v=4"></script>
+
+  <!-- コミュニティ選択の補助（main.jsを上書きしないように IIFE で閉じる） -->
+  <script>
+    (function () {
+      const $ = (id) => document.getElementById(id);
+
+      async function apiLocal(path, options = {}) {
+        const res = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...options,
+        });
+        const text = await res.text();
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch {}
+        if (!res.ok) throw new Error(data.message || text || "API error");
+        return data;
+      }
+
+      function setVisibilityUIForCommunityMode(isCommunity){
+        const vis = $("visibility");
+        const hint = $("visibilityHint");
+        if (!vis || !hint) return;
+
+        if (isCommunity){
+          vis.value = "private";
+          vis.disabled = true;
+          hint.textContent = "コミュニティ投稿では、閲覧は所属メンバーのみになります（公開一覧には表示されません）。";
+        } else {
+          vis.disabled = false;
+          hint.textContent = "";
+        }
+      }
+
+      async function loadMyCommunities(){
+        const sel = $("community_id");
+        if (!sel) return;
+
+        sel.innerHTML = `<option value="" selected>（未選択：大学公開/個人ノートとして投稿）</option>`;
+
+        try{
+          const me = await apiLocal("/api/me");
+          if (!me.loggedIn){
+            $("communityHelp").textContent = "※ログインするとコミュニティを選べます。";
+            setVisibilityUIForCommunityMode(false);
+            return;
+          }
+
+          const list = await apiLocal("/api/communities/mine");
+          if (!list || list.length === 0){
+            $("communityHelp").textContent = "※参加中コミュニティがありません（loginページで作成/参加できます）。";
+            setVisibilityUIForCommunityMode(false);
+            return;
+          }
+
+          $("communityHelp").textContent =
+            "※コミュニティを選ぶと「所属メンバーのみ閲覧」になります。公開ノート一覧には出ません。";
+
+          for (const c of list){
+            const opt = document.createElement("option");
+            opt.value = String(c.id);
+            opt.textContent = `ID:${c.id} / ${c.name}${c.role ? " (" + c.role + ")" : ""}`;
+            sel.appendChild(opt);
+          }
+        } catch (e){
+          $("communityHelp").textContent = "※コミュニティ一覧の取得に失敗しました（ログイン中か確認してください）。";
+          setVisibilityUIForCommunityMode(false);
+        }
+      }
+
+      document.addEventListener("change", (ev) => {
+        if (ev.target && ev.target.id === "community_id"){
+          const isCommunity = !!$("community_id").value;
+          setVisibilityUIForCommunityMode(isCommunity);
+        }
+      });
+
+      $("btnReloadCommunities")?.addEventListener("click", async () => {
+        await loadMyCommunities();
+        const isCommunity = !!$("community_id").value;
+        setVisibilityUIForCommunityMode(isCommunity);
+      });
+
+      loadMyCommunities().then(() => {
+        const isCommunity = !!$("community_id").value;
+        setVisibilityUIForCommunityMode(isCommunity);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ログイン | 講義ノートメーカー</title>
+  <link rel="stylesheet" href="./style.css?v=4" />
+  <style>
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px){ .two { grid-template-columns: 1fr; } }
+    .small { color: #555; font-size: 14px; }
+    .list { margin: 8px 0 0; padding-left: 18px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px; }
+    .row2 { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    input[type="number"]{ width: 160px; }
+  </style>
+</head>
+<body>
+  <a href="/">← トップへ</a>
+  <h1>ログイン</h1>
+
+  <div class="card">
+    <h2>いまの状態</h2>
+    <div id="status" class="small">読み込み中…</div>
+    <div class="row" style="margin-top:10px;">
+      <button id="btnGoMyPage">マイページへ</button>
+      <button id="btnLogout">ログアウト</button>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <h2>新規登録</h2>
+      <label>ユーザー名</label>
+      <input id="reg_username" placeholder="例：hikari" />
+      <label>パスワード（6文字以上）</label>
+      <input id="reg_password" type="password" placeholder="******" />
+      <button id="btnRegister">登録してログイン</button>
+      <div class="small">※ユーザー名は他の人と被ると登録できません。</div>
+    </div>
+
+    <div class="card">
+      <h2>ログイン</h2>
+      <label>ユーザー名</label>
+      <input id="login_username" placeholder="例：hikari" />
+      <label>パスワード</label>
+      <input id="login_password" type="password" placeholder="******" />
+      <button id="btnLogin">ログイン</button>
+      <div class="small">※ログインするとノート投稿・マイページが使えます。</div>
+    </div>
+  </div>
+
+  <!-- ★追加：コミュニティ（B方式） -->
+  <div class="two" style="margin-top:12px;">
+    <div class="card">
+      <h2>コミュニティを作る</h2>
+      <div class="small">※作成すると、あなたが admin として参加します。</div>
+
+      <label>コミュニティ名</label>
+      <input id="c_name" placeholder="例：○○大学 経済学A" />
+
+      <label>参加コード（8文字以上推奨）</label>
+      <input id="c_join_code" type="password" placeholder="例：supersecret12" />
+
+      <button id="btnCreateCommunity">作成</button>
+      <div id="createResult" class="small" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>コミュニティに参加</h2>
+      <div class="small">※コミュニティIDと参加コードが必要です。</div>
+
+      <label>コミュニティID</label>
+      <input id="join_community_id" type="number" placeholder="例：1" />
+
+      <label>参加コード</label>
+      <input id="join_code" type="password" placeholder="例：supersecret12" />
+
+      <button id="btnJoinCommunity">参加</button>
+      <div id="joinResult" class="small" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- ★追加：参加中コミュニティ一覧 -->
+  <div class="card" style="margin-top:12px;">
+    <div class="row2">
+      <h2 style="margin:0;">参加中コミュニティ</h2>
+      <button id="btnReloadCommunities">更新</button>
+    </div>
+    <div id="communitiesHelp" class="small" style="margin-top:6px;">
+      ※ログインしていると一覧が表示されます。コミュニティIDは「参加」で使います。
+    </div>
+    <ul id="communitiesList" class="list"></ul>
+  </div>
+
+  <script>
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      });
+
+      const text = await res.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch {}
+
+      if (!res.ok) {
+      throw new Error(data.detail || data.message || text || "API error");
+    }
+    return data;
+    }
+
+
+    function $(id){ return document.getElementById(id); }
+
+    function setDisabledForCommunityArea(disabled){
+      $("btnCreateCommunity").disabled = disabled;
+      $("btnJoinCommunity").disabled = disabled;
+      $("btnReloadCommunities").disabled = disabled;
+      $("c_name").disabled = disabled;
+      $("c_join_code").disabled = disabled;
+      $("join_community_id").disabled = disabled;
+      $("join_code").disabled = disabled;
+    }
+
+    function clearCommunityMessages(){
+      $("createResult").textContent = "";
+      $("joinResult").textContent = "";
+    }
+
+    function renderCommunities(list){
+      const ul = $("communitiesList");
+      ul.innerHTML = "";
+      if (!list || list.length === 0){
+        const li = document.createElement("li");
+        li.textContent = "（参加中コミュニティはありません）";
+        ul.appendChild(li);
+        return;
+      }
+
+      for (const c of list){
+        const li = document.createElement("li");
+        const roleTag = c.role ? `<span class="tag">${c.role}</span>` : "";
+        li.innerHTML = `ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")} ${roleTag}`;
+        ul.appendChild(li);
+      }
+    }
+
+    function escapeHtml(s){
+      return String(s)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    async function refreshCommunities(){
+      try{
+        const me = await api("/api/me");
+        if (!me.loggedIn){
+          renderCommunities([]);
+          return;
+        }
+        const list = await api("/api/communities/mine");
+        renderCommunities(list);
+      } catch (e){
+        // 失敗時は静かに表示（既存UIを崩さない）
+        renderCommunities([]);
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const me = await api("/api/me");
+        if (!me.loggedIn) {
+          $("status").textContent = "未ログインです。";
+          setDisabledForCommunityArea(true);
+          renderCommunities([]);
+          return;
+        }
+        $("status").textContent = `ログイン中：${me.username}（id: ${me.id}）`;
+        setDisabledForCommunityArea(false);
+        await refreshCommunities();
+      } catch (e) {
+        $("status").textContent = "状態取得に失敗：" + e.message;
+        setDisabledForCommunityArea(true);
+        renderCommunities([]);
+      }
+    }
+
+    $("btnGoMyPage").addEventListener("click", () => {
+      location.href = "/mypage.html";
+    });
+
+    $("btnRegister").addEventListener("click", async () => {
+      try {
+        const username = $("reg_username").value.trim();
+        const password = $("reg_password").value;
+        const r = await api("/api/register", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        alert("登録＆ログインしました: " + r.username);
+        clearCommunityMessages();
+        await refreshStatus();
+      } catch (e) {
+        alert("登録失敗: " + e.message);
+      }
+    });
+
+    $("btnLogin").addEventListener("click", async () => {
+      try {
+        const username = $("login_username").value.trim();
+        const password = $("login_password").value;
+        const r = await api("/api/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        alert("ログインしました: " + r.username);
+        clearCommunityMessages();
+        await refreshStatus();
+      } catch (e) {
+        alert("ログイン失敗: " + e.message);
+      }
+    });
+
+    $("btnLogout").addEventListener("click", async () => {
+      try {
+        await api("/api/logout", { method: "POST" });
+        alert("ログアウトしました");
+        clearCommunityMessages();
+        await refreshStatus();
+      } catch (e) {
+        alert("ログアウト失敗: " + e.message);
+      }
+    });
+
+    // ★追加：コミュ作成
+    $("btnCreateCommunity").addEventListener("click", async () => {
+      try {
+        const name = $("c_name").value.trim();
+        const join_code = $("c_join_code").value;
+
+        const r = await api("/api/communities", {
+          method: "POST",
+          body: JSON.stringify({ name, join_code }),
+        });
+
+        $("createResult").textContent = `作成しました：${r.name}（ID: ${r.id}）`;
+        $("c_name").value = "";
+        $("c_join_code").value = "";
+        await refreshCommunities();
+      } catch (e) {
+        $("createResult").textContent = "作成失敗: " + e.message;
+      }
+    });
+
+    // ★追加：コミュ参加
+    $("btnJoinCommunity").addEventListener("click", async () => {
+      try {
+        const community_id = Number($("join_community_id").value);
+        const join_code = $("join_code").value;
+
+        const r = await api("/api/communities/join", {
+          method: "POST",
+          body: JSON.stringify({ community_id, join_code }),
+        });
+
+        $("joinResult").textContent = `参加しました：${r.name}（ID: ${r.id}）`;
+        $("join_community_id").value = "";
+        $("join_code").value = "";
+        await refreshCommunities();
+      } catch (e) {
+        $("joinResult").textContent = "参加失敗: " + e.message;
+      }
+    });
+
+    $("btnReloadCommunities").addEventListener("click", async () => {
+      clearCommunityMessages();
+      await refreshCommunities();
+    });
+
+    refreshStatus();
+  </script>
+</body>
+</html>

@@ -20,7 +20,9 @@
  * OPENAI_API_KEY=sk-...
  */
 
-require("dotenv").config();
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 
 const express = require("express");
 const path = require("path");
@@ -29,7 +31,13 @@ const session = require("express-session");
 const bcrypt = require("bcrypt");
 
 const OpenAI = require("openai");
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 const app = express();
 
@@ -294,9 +302,7 @@ function generateQuizzesFromBodyRaw(body_raw) {
  * クイズ生成（AI版）：説明文でも作れる
  */
 async function generateQuizzesWithAI({ title, course_name, body_raw }) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is missing");
-  }
+  const openai = getOpenAIClient();
 
   const body = String(body_raw || "").slice(0, 8000);
 
@@ -871,6 +877,6 @@ app.use((err, req, res, next) => {
 
 // ---------- Listen ----------
 const PORT = Number(process.env.PORT || 3000);
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });

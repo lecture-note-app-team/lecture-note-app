@@ -372,9 +372,15 @@ ${body}
     }));
 }
 
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
+
 // ---------- Pages ----------
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "public", "index.html"), (err) => {
+    if (err) return res.status(200).send("ok");
+  });
 });
 
 // ---------- Health ----------

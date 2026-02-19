@@ -35,7 +35,8 @@ if (process.env.NODE_ENV !== "production") {
 
 const express = require("express");
 const path = require("path");
-const mysql = require("mysql2/promise");
+const mysqlPromise = require("mysql2/promise"); // ← アプリ用（今まで通り）
+const mysql2 = require("mysql2");               // ← セッションStore用（追加）
 const session = require("express-session");
 const MySQLStore = require("express-mysql-session")(session);
 const bcrypt = require("bcrypt");
@@ -60,12 +61,20 @@ if (process.env.NODE_ENV === "production") {
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ---------- Session Store (MySQL) ----------
+// ---------- Session Store ----------
+const sessionDb = mysql2.createPool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT || 3306),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+});
+
 const sessionStore = new MySQLStore(
   {
     clearExpired: true,
-    checkExpirationInterval: 1000 * 60 * 15, // 15分ごと
-    expiration: 1000 * 60 * 60 * 24 * 7, // 7日
+    checkExpirationInterval: 1000 * 60 * 15,
+    expiration: 1000 * 60 * 60 * 24 * 7,
     createDatabaseTable: true,
     schema: {
       tableName: "sessions",
@@ -76,29 +85,7 @@ const sessionStore = new MySQLStore(
       },
     },
   },
-  {
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT || 3306),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-  }
-);
-
-app.use(
-  session({
-    name: "sid",
-    secret: process.env.SESSION_SECRET || "dev_secret_change_me",
-    resave: false,
-    saveUninitialized: false,
-    store: sessionStore,
-    cookie: {
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-      secure: process.env.NODE_ENV === "production",
-    },
-  })
+  sessionDb
 );
 
 // リクエストログ（必要なら消してOK）
@@ -111,7 +98,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------- DB Pool ----------
-const pool = mysql.createPool({
+const pool = mysqlPromise.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,

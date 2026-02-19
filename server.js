@@ -10,14 +10,11 @@
  * - note_quizzes テーブルがある
  * - universities / users / communities / user_communities / notes がある
  *
- * .env:
- * DB_HOST=...
- * DB_USER=...
- * DB_PASSWORD=...
- * DB_NAME=...
- * DB_PORT=3306
- * SESSION_SECRET=...
- * OPENAI_API_KEY=sk-...
+ * Railway Variables:
+ * DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT
+ * SESSION_SECRET
+ * OPENAI_API_KEY
+ * NODE_ENV=production
  */
 
 process.on("uncaughtException", (err) => {
@@ -27,11 +24,11 @@ process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED_REJECTION:", reason);
 });
 
-
 console.log("BOOT: server.js loaded");
 console.log("BOOT: NODE_ENV=", process.env.NODE_ENV);
 console.log("BOOT: PORT=", process.env.PORT);
 
+// ローカルだけdotenv（Railway本番はVariablesを使う）
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
@@ -42,9 +39,9 @@ const mysql = require("mysql2/promise");
 const session = require("express-session");
 const MySQLStore = require("express-mysql-session")(session);
 const bcrypt = require("bcrypt");
-
 const OpenAI = require("openai");
 
+// ---------- OpenAI ----------
 function getOpenAIClient() {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is missing");
@@ -54,26 +51,22 @@ function getOpenAIClient() {
 
 const app = express();
 
-app.get("/health", (req, res) => {
-  res.status(200).send("ok");
-});
-
-app.get("/", (req, res) => {
-  res.status(200).send("ok");
-});
+// Railwayなどプロキシ配下
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
 
 // ---------- Middlewares ----------
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-app.set("trust proxy", 1); // Railwayなどproxy配下は必須寄り
-
+// ---------- Session Store (MySQL) ----------
 const sessionStore = new MySQLStore(
   {
     clearExpired: true,
     checkExpirationInterval: 1000 * 60 * 15, // 15分ごと
-    expiration: 1000 * 60 * 60 * 24 * 7,    // 7日
-    createDatabaseTable: true,              // sessionsテーブル自動作成
+    expiration: 1000 * 60 * 60 * 24 * 7, // 7日
+    createDatabaseTable: true,
     schema: {
       tableName: "sessions",
       columnNames: {
@@ -101,18 +94,20 @@ app.use(
     store: sessionStore,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // 本番だけtrue
       sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7日
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+      secure: process.env.NODE_ENV === "production",
     },
   })
 );
 
+// リクエストログ（必要なら消してOK）
 app.use((req, res, next) => {
   console.log("REQ:", req.method, req.path);
   next();
 });
 
+// 静的配信
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------- DB Pool ----------
@@ -146,13 +141,10 @@ function slugifyJP(input) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9\-_ぁ-んァ-ン一-龥]/g, "") // 日本語も残す
+    .replace(/[^a-z0-9\-_ぁ-んァ-ン一-龥]/g, "")
     .slice(0, 80);
 }
 
-/**
- * community所属チェック（B方式）
- */
 async function userBelongsToCommunity(userId, communityId) {
   const [rows] = await pool.query(
     `SELECT 1
@@ -164,9 +156,6 @@ async function userBelongsToCommunity(userId, communityId) {
   return rows.length > 0;
 }
 
-/**
- * 講義ノート用の簡易整形（AIなしMVP）
- */
 function buildMarkdown({ course_name, lecture_no, lecture_date, title, body_raw }) {
   const lines = String(body_raw || "")
     .replace(/\r\n/g, "\n")
@@ -226,26 +215,17 @@ async function getOrCreateUniversityId(name) {
     const [result] = await pool.query("INSERT INTO universities (name) VALUES (?)", [uniName]);
     return result.insertId;
   } catch (e) {
-    // UNIQUE衝突など → 再取得
     const [rows2] = await pool.query("SELECT id FROM universities WHERE name = ?", [uniName]);
     if (rows2.length) return rows2[0].id;
     throw e;
   }
 }
 
-/**
- * ノート取得（共通）
- */
 async function getNoteById(noteId) {
   const [rows] = await pool.query("SELECT * FROM notes WHERE id = ?", [noteId]);
   return rows.length ? rows[0] : null;
 }
 
-/**
- * ノート閲覧権限チェック
- * - community_id がある → ログイン必須 + 所属必須
- * - community_id がない → visibility private は本人のみ
- */
 async function canViewNote(req, note) {
   if (!note) return { ok: false, status: 404, message: "not found" };
 
@@ -264,10 +244,6 @@ async function canViewNote(req, note) {
   return { ok: true };
 }
 
-/**
- * ノート編集権限（クイズ生成など）
- * - 作者のみ
- */
 function canEditNote(req, note) {
   if (!req.session?.userId) return { ok: false, status: 401, message: "login required" };
   if (!note) return { ok: false, status: 404, message: "not found" };
@@ -275,9 +251,6 @@ function canEditNote(req, note) {
   return { ok: true };
 }
 
-/**
- * クイズ生成（ルール版）：本文から抽出（AIなしMVP）
- */
 function generateQuizzesFromBodyRaw(body_raw) {
   const lines = String(body_raw || "")
     .replace(/\r\n/g, "\n")
@@ -296,7 +269,6 @@ function generateQuizzesFromBodyRaw(body_raw) {
   };
 
   for (const line of lines) {
-    // 用語:
     if (line.startsWith("用語:")) {
       const content = line.replace(/^用語:\s*/, "").trim();
       const m = content.match(/^(.+?)\s*(=|＝|:|：)\s*(.+)$/);
@@ -317,14 +289,12 @@ function generateQuizzesFromBodyRaw(body_raw) {
       continue;
     }
 
-    // 疑問:
     if (line.startsWith("？") || line.startsWith("?") || line.endsWith("?") || line.endsWith("？")) {
       const q = line.replace(/^[？?]\s*/, "").trim();
       if (q) pushUnique({ type: "question", question: q, answer: "", source_line: line });
       continue;
     }
 
-    // 重要（⭐️）
     if (line.includes("⭐️") || line.toLowerCase().startsWith("important:")) {
       const cleaned = line.replace("⭐️", "").replace(/^important:\s*/i, "").trim();
       if (cleaned) {
@@ -338,7 +308,6 @@ function generateQuizzesFromBodyRaw(body_raw) {
       continue;
     }
 
-    // A= B / A：B を拾う
     const m2 = line.match(/^(.+?)\s*(=|＝|:|：)\s*(.+)$/);
     if (m2) {
       const left = m2[1].trim();
@@ -352,12 +321,8 @@ function generateQuizzesFromBodyRaw(body_raw) {
   return out.slice(0, 30);
 }
 
-/**
- * クイズ生成（AI版）：説明文でも作れる
- */
 async function generateQuizzesWithAI({ title, course_name, body_raw }) {
   const openai = getOpenAIClient();
-
   const body = String(body_raw || "").slice(0, 8000);
 
   const system = `
@@ -407,7 +372,6 @@ ${body}
   try {
     parsed = JSON.parse(text);
   } catch {
-    // ```json ... ``` など救済
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) throw new Error("AIの返答がJSONとして解析できませんでした");
     parsed = JSON.parse(m[0]);
@@ -426,22 +390,20 @@ ${body}
     }));
 }
 
-app.get("/", (req, res) => {
-  res.status(200).send("ok");
-});
+// ---------- Routes: Health & Top ----------
+app.get("/health", (req, res) => res.status(200).send("ok"));
 
-// ---------- Pages ----------
+app.get("/api/health", wrap(async (req, res) => {
+  const [r] = await pool.query("SELECT 1 AS ok");
+  res.json({ ok: true, db: r?.[0]?.ok === 1 });
+}));
+
+// "/" は index.html を返す（無ければ ok）
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"), (err) => {
     if (err) return res.status(200).send("ok");
   });
 });
-
-// ---------- Health ----------
-app.get("/api/health", wrap(async (req, res) => {
-  const [r] = await pool.query("SELECT 1 AS ok");
-  res.json({ ok: true, db: r?.[0]?.ok === 1 });
-}));
 
 // ---------- Auth APIs ----------
 app.get("/api/me", (req, res) => {
@@ -493,6 +455,27 @@ app.post("/api/login", wrap(async (req, res) => {
 app.post("/api/logout", (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
 });
+
+// ---- 以下、Communities / Notes / Quizzes は「あなたの今のコード」をこの下にそのまま続けてOK ----
+// ここから下は、あなたが貼ってくれた既存のままで大丈夫。
+// （app.get("/") を追加しないことだけ注意）
+
+// ---------- Communities APIs (B方式) ----------
+// ...（ここ以降は今のコードをそのまま貼る）...
+
+// ---------- Error Handler ----------
+app.use((err, req, res, next) => {
+  console.error(err);
+  const isApi = String(req.path || "").startsWith("/api/");
+  if (isApi) {
+    return res.status(500).json({
+      message: "server error",
+      detail: err?.message || String(err),
+    });
+  }
+  res.status(500).send("Server Error");
+});
+
 
 // ---------- Communities APIs (B方式) ----------
 

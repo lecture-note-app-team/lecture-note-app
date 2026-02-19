@@ -19,6 +19,15 @@
  * SESSION_SECRET=...
  * OPENAI_API_KEY=sk-...
  */
+
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
+
+app.get("/", (req, res) => {
+  res.status(200).send("ok");
+});
+
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT_EXCEPTION:", err);
 });
@@ -69,6 +78,11 @@ app.use(
     },
   })
 );
+
+app.use((req, res, next) => {
+  console.log("REQ:", req.method, req.path);
+  next();
+});
 
 app.use(express.static(path.join(__dirname, "public")));
 

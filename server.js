@@ -140,7 +140,7 @@ async function userRoleInCommunity(userId, communityId) {
 // ---------- Helpers ----------
 function requireLogin(req, res, next) {
   if (!req.session?.userId) {
-    return res.status(401).json({ message: "login required" });
+    return res.status(401).json({ message: "ログインしてください" });
   }
   next();
 }
@@ -246,14 +246,14 @@ async function canViewNote(req, note) {
   if (!note) return { ok: false, status: 404, message: "not found" };
 
   if (note.community_id) {
-    if (!req.session?.userId) return { ok: false, status: 401, message: "login required" };
+    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
     const belongs = await userBelongsToCommunity(req.session.userId, note.community_id);
     if (!belongs) return { ok: false, status: 403, message: "forbidden" };
     return { ok: true };
   }
 
   if (note.visibility === "private") {
-    if (!req.session?.userId) return { ok: false, status: 401, message: "login required" };
+    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
     if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
   }
 
@@ -261,7 +261,7 @@ async function canViewNote(req, note) {
 }
 
 function canEditNote(req, note) {
-  if (!req.session?.userId) return { ok: false, status: 401, message: "login required" };
+  if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
   if (!note) return { ok: false, status: 404, message: "not found" };
   if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
   return { ok: true };

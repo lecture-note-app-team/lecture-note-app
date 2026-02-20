@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://lecturenotes-production.up.railway.app/sitemap.xml

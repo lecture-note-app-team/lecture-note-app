@@ -488,3 +488,33 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter") searchCommunities();
   });
 });
+
+async function renderMyCommunities() {
+  const ul = document.getElementById("communitiesList");
+  if (!ul) return;
+
+  ul.innerHTML = `<li class="muted">読み込み中...</li>`;
+
+  try {
+    const list = await api("/api/communities/mine"); // member_count付きのAPIなら表示できる
+    if (!Array.isArray(list) || list.length === 0) {
+      ul.innerHTML = `<li class="muted">（参加中コミュニティはありません）</li>`;
+      return;
+    }
+
+    ul.innerHTML = list.map(c => `
+      <li style="margin:6px 0;">
+        <strong>${escapeHtml(c.name)}</strong>
+        <span class="small">（役割：${escapeHtml(c.role || "")} / メンバー数：${Number(c.member_count ?? 0)}）</span>
+      </li>
+    `).join("");
+  } catch (e) {
+    ul.innerHTML = `<li class="error">取得失敗：${escapeHtml(e.message || "error")}</li>`;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  renderMyCommunities();
+  document.getElementById("btnReloadCommunities")?.addEventListener("click", renderMyCommunities);
+});
+

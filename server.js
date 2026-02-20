@@ -810,53 +810,460 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
   res.json(rows);
 }));
 
-// クイズ生成（作者のみ）
-// engine: "rule" | "ai"
-app.post("/api/notes/:id/quizzes/generate", requireLogin, wrap(async (req, res) => {
-  const noteId = Number(req.params.id);
-  const mode = String(req.body?.mode || "replace");     // replace | append
-  const engine = String(req.body?.engine || "rule");   // rule | ai
+// ============================
+// 強化版 ルールクイズ生成
+// generateQuizzesFromBodyRaw(body_raw) を置き換え用
+// ============================
 
-  const note = await getNoteById(noteId);
-  const edit = canEditNote(req, note);
-  if (!edit.ok) return res.status(edit.status).json({ message: edit.message });
+function generateQuizzesFromBodyRaw(bodyRaw, options = {}) {
+  const opts = {
+    limit: 20,              // 生成上限
+    minScore: 3,            // 採用最低スコア
+    allowTrueFalse: true,   // 正誤問題を混ぜる
+    ...options,
+  };
 
-  let quizzes = [];
-  if (engine === "ai") {
-    quizzes = await generateQuizzesWithAI({
-      title: note.title,
-      course_name: note.course_name,
-      body_raw: note.body_raw,
-    });
-  } else {
-    quizzes = generateQuizzesFromBodyRaw(note.body_raw);
+  const lines = String(bodyRaw || "").split(/\r?\n/);
+  const normalized = normalizeLines(lines);
+
+  // 文候補を作る（見出し・箇条書き・文章）
+  const units = toUnits(normalized); // { text, heading, lineNo }
+
+  // 候補抽出
+  let candidates = [];
+  for (const u of units) {
+    const extracted = extractFromUnit(u);
+    candidates.push(...extracted);
   }
 
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
+  // 品質フィルタ + スコアリング
+  candidates = candidates
+    .map(c => ({ ...c, score: scoreCandidate(c) }))
+    .filter(c => c.score >= opts.minScore)
+    .filter(c => isGoodCandidate(c));
 
-    if (mode === "replace") {
-      await conn.query("DELETE FROM note_quizzes WHERE note_id = ?", [noteId]);
+  // 重複排除（質問の正規化で）
+  candidates = dedupeCandidates(candidates);
+
+  // スコア順に上位を採用
+  candidates.sort((a, b) => b.score - a.score);
+
+  // 正誤問題を適度に混ぜる（偏り防止）
+  let picked = pickWithVariety(candidates, opts.limit, opts.allowTrueFalse);
+
+  // DBに入れる形に整形
+  return picked.map(c => ({
+    type: c.type || "short",
+    question: c.question,
+    answer: c.answer ?? "",
+    source_line: typeof c.source_line === "number" ? c.source_line : null,
+  }));
+}
+
+// ---- 前処理: 行をきれいにする ----
+function normalizeLines(lines) {
+  const out = [];
+  let inCode = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let s = lines[i] ?? "";
+
+    // ``` code block
+    if (/^\s*```/.test(s)) {
+      inCode = !inCode;
+      continue;
     }
+    if (inCode) continue;
 
-    for (const q of quizzes) {
-      await conn.query(
-        `INSERT INTO note_quizzes (note_id, user_id, type, question, answer, source_line)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [noteId, req.session.userId, q.type, q.question, q.answer ?? "", q.source_line ?? null]
-      );
-    }
+    // 余計なゼロ幅やタブ
+    s = s.replace(/\u200B/g, "").replace(/\t/g, " ");
 
-    await conn.commit();
-    res.json({ ok: true, inserted: quizzes.length, mode, engine });
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
+    // URLはノイズになりがち
+    s = s.replace(/https?:\/\/\S+/g, "").trimEnd();
+
+    out.push({ raw: s, lineNo: i + 1 });
+  } 
+    　  // 7) 保険：何も取れなかった時に最低1問だけ作る（0件回避）
+    if (out.length === 0) {
+      const t = text.replace(/[。！？]$/, "");
+      if (t.length >= 25 && t.length <= 120) {
+        const mid = Math.floor(t.length * 0.45);
+        out.push(makeCandidate({
+          type: "fill",
+          question: withHeading(heading, t.slice(0, mid) + "（　　　）"),
+          answer: t.slice(mid),
+          source_line,
+          meta: { kind: "fallback" },
+        }));
+      }
   }
-}));
+
+  return out;
+}
+
+// ---- ユニット化: 見出し/箇条書きを扱いやすくする ----
+function toUnits(normLines) {
+  const units = [];
+  let currentHeading = "";
+
+  // 箇条書きをまとめるためのバッファ
+  let bulletBuf = [];
+  let bulletStartLine = null;
+
+  const flushBullets = () => {
+    if (!bulletBuf.length) return;
+    const text = bulletBuf.join(" / ").trim();
+    if (text) {
+      units.push({
+        text,
+        heading: currentHeading,
+        lineNo: bulletStartLine,
+      });
+    }
+    bulletBuf = [];
+    bulletStartLine = null;
+  };
+
+  for (const item of normLines) {
+    let s = (item.raw || "").trim();
+
+    // 空行
+    if (!s) {
+      flushBullets();
+      continue;
+    }
+
+    // 見出し
+    const hm = s.match(/^(#{1,6})\s+(.+)$/);
+    if (hm) {
+      flushBullets();
+      currentHeading = cleanInline(hm[2]);
+      continue;
+    }
+
+    // 箇条書き（- * ・ 1. など）
+    const bm = s.match(/^(\-|\*|・|\d+\.)\s+(.+)$/);
+    if (bm) {
+      const body = cleanInline(bm[2]);
+      if (!bulletBuf.length) bulletStartLine = item.lineNo;
+      if (body) bulletBuf.push(body);
+      continue;
+    }
+
+    flushBullets();
+
+    // Markdown強調などを軽く除去して文に
+    s = cleanInline(s);
+
+    // 文章分割（。！？で分ける）
+    const parts = splitSentences(s);
+    for (const p of parts) {
+      const t = p.trim();
+      if (!t) continue;
+      units.push({
+        text: t,
+        heading: currentHeading,
+        lineNo: item.lineNo,
+      });
+    }
+  }
+
+  flushBullets();
+  return units;
+}
+
+function cleanInline(s) {
+  return String(s || "")
+    .replace(/[*_~`]/g, "")          // markdown記号
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitSentences(s) {
+  // 日本語中心：句点で切る。長い行は読点も補助で切る
+  // ただし短すぎる断片は避けたいので後段でフィルタ
+  const parts = s
+    .replace(/。/g, "。|")
+    .replace(/！/g, "！|")
+    .replace(/？/g, "？|")
+    .split("|");
+  return parts;
+}
+
+// ---- 抽出: ユニットから問題候補を作る ----
+function extractFromUnit(u) {
+  const text = u.text;
+  const heading = u.heading;
+  const source_line = u.lineNo;
+
+  const out = [];
+
+  // 1) 定義系: XとはY / XはYのこと / XをYという
+  // 例: 「相対速度とは、...である」
+  {
+    const m1 = text.match(/^(.{2,30}?)とは、?(.{6,120}?)(?:である|のこと|を指す|という)?[。！？]?$/);
+    if (m1) {
+      const term = trimJP(m1[1]);
+      const def = trimJP(m1[2]);
+      if (term && def) {
+        out.push(makeCandidate({
+          type: "fill",
+          question: withHeading(heading, `「${term}」とは何か？`),
+          answer: def,
+          source_line,
+          meta: { kind: "def" },
+        }));
+        out.push(makeCandidate({
+          type: "fill",
+          question: withHeading(heading, `${term}とは、（　　　）である`),
+          answer: def,
+          source_line,
+          meta: { kind: "def_blank" },
+        }));
+      }
+    }
+  }
+
+  // 2) 分類: XはAとBに分かれる / XにはA,Bがある
+  {
+    const m = text.match(/^(.{2,30}?)は、?(.{2,40}?)(?:と|、)(.{2,40}?)(?:に分かれる|に分類される|がある|が存在する)[。！？]?$/);
+    if (m) {
+      const subject = trimJP(m[1]);
+      const a = trimJP(m[2]);
+      const b = trimJP(m[3]);
+      if (subject && a && b) {
+        out.push(makeCandidate({
+          type: "short",
+          question: withHeading(heading, `${subject}は何と何に分かれる？`),
+          answer: `${a} と ${b}`,
+          source_line,
+          meta: { kind: "class2" },
+        }));
+      }
+    }
+  }
+
+  // 3) 列挙: 特徴はA/B/C, 〜にはA,B,C
+  {
+    const m = text.match(/^(.{2,30}?)(?:の特徴|の要素|のポイント|には|は)(?:、|:)?\s*(.{2,120})$/);
+    if (m) {
+      const subject = trimJP(m[1]);
+      const rest = trimJP(m[2]);
+      // 区切り推定
+      const items = splitList(rest);
+      if (subject && items.length >= 3) {
+        const ans = items.slice(0, 5).join(" / ");
+        out.push(makeCandidate({
+          type: "short",
+          question: withHeading(heading, `${subject}の（主な）ポイントを挙げよ`),
+          answer: ans,
+          source_line,
+          meta: { kind: "list" },
+        }));
+      }
+    }
+  }
+
+  // 4) 因果: AのためB / AによりB / AなのでB
+  {
+    const m = text.match(/^(.{4,80}?)(?:のため|により|なので|その結果|したがって)(.{4,80})$/);
+    if (m) {
+      const cause = trimJP(m[1]);
+      const effect = trimJP(m[2]);
+      if (cause && effect) {
+        out.push(makeCandidate({
+          type: "short",
+          question: withHeading(heading, `次の因果関係を答えよ：${cause} → ？`),
+          answer: effect.replace(/[。！？]$/, ""),
+          source_line,
+          meta: { kind: "cause" },
+        }));
+      }
+    }
+  }
+
+  // 5) 手順: まず/次に/最後に が含まれる文（箇条書き連結が特に効く）
+  if (/(まず|次に|その後|最後に)/.test(text)) {
+    const steps = text.split(/(?:\/|、|,)/).map(t => trimJP(t)).filter(Boolean);
+    if (steps.length >= 3) {
+      out.push(makeCandidate({
+        type: "short",
+        question: withHeading(heading, `手順を順番に説明せよ`),
+        answer: steps.slice(0, 6).join(" → "),
+        source_line,
+        meta: { kind: "steps" },
+      }));
+    }
+  }
+
+  // 6) 正誤（軽め）：定義文っぽいのだけから作る（出し過ぎないようスコアで制御）
+  // 文章が「Xとは...」形式のときに、少し改変して誤文を作る（安全な範囲で）
+  {
+    const m = text.match(/^(.{2,30}?)とは、?(.{6,120}?)(?:である|のこと|を指す|という)?[。！？]?$/);
+    if (m) {
+      const term = trimJP(m[1]);
+      const def = trimJP(m[2]);
+      // defが短すぎる/長すぎると微妙
+      if (term && def && def.length >= 8 && def.length <= 80) {
+        const wrong = def.replace(/重要/g, "不要").replace(/増加/g, "減少").replace(/大/g, "小");
+        if (wrong !== def) {
+          out.push(makeCandidate({
+            type: "tf",
+            question: withHeading(heading, `正しい？誤り？：「${term}とは${wrong}である」`),
+            answer: "誤り",
+            source_line,
+            meta: { kind: "tf" },
+          }));
+          out.push(makeCandidate({
+            type: "tf",
+            question: withHeading(heading, `正しい？誤り？：「${term}とは${def}である」`),
+            answer: "正しい",
+            source_line,
+            meta: { kind: "tf" },
+          }));
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+function makeCandidate(c) {
+  return {
+    type: c.type,
+    question: String(c.question || "").trim(),
+    answer: c.answer == null ? "" : String(c.answer).trim(),
+    source_line: c.source_line,
+    meta: c.meta || {},
+  };
+}
+
+function withHeading(heading, q) {
+  if (!heading) return q;
+  // UIで邪魔ならここを消してOK
+  return `【${heading}】${q}`;
+}
+
+function trimJP(s) {
+  return String(s || "").replace(/^[\s　]+|[\s　]+$/g, "");
+}
+
+function splitList(s) {
+  // 「、」「/」「・」などの列挙を分割
+  return String(s || "")
+    .replace(/[。！？]$/g, "")
+    .split(/(?:\/|、|,|・|;|：|:)\s*/g)
+    .map(t => trimJP(t))
+    .filter(t => t && t.length <= 60);
+}
+
+// ---- スコアリングとフィルタ ----
+function scoreCandidate(c) {
+  let score = 0;
+
+  const q = c.question || "";
+  const a = c.answer || "";
+
+  // 種類ごとの基礎点
+  if (c.meta.kind === "def") score += 6;
+  if (c.meta.kind === "def_blank") score += 5;
+  if (c.meta.kind === "class2") score += 5;
+  if (c.meta.kind === "list") score += 4;
+  if (c.meta.kind === "cause") score += 4;
+  if (c.meta.kind === "steps") score += 4;
+  if (c.meta.kind === "tf") score += 2;
+
+  // 長さボーナス（短すぎ/長すぎは減点）
+  const qlen = q.length;
+  const alen = a.length;
+  score += lengthScore(qlen, 15, 90);
+  score += lengthScore(alen, 6, 120);
+
+  // 指示語だらけは減点
+  if (/(これ|それ|あれ|この|その|あの)/.test(q)) score -= 2;
+  if (/(これ|それ|あれ|この|その|あの)/.test(a)) score -= 1;
+
+  // 数字/単位が入ってると学習価値高め
+  if (/[0-9０-９]/.test(q) || /[0-9０-９]/.test(a)) score += 1;
+
+  // 章情報がついてると文脈が良い
+  if (/^【.+】/.test(q)) score += 1;
+
+  return score;
+}
+
+function lengthScore(len, min, max) {
+  if (len < min) return -2;
+  if (len > max) return -1;
+  return 1;
+}
+
+function isGoodCandidate(c) {
+  const q = c.question || "";
+  const a = c.answer || "";
+
+  // 質問必須
+  if (!q || q.length < 8) return false;
+
+  // answerが空でも良いケースはあるが、基本はある方が良い
+  if (c.type !== "tf" && (!a || a.length < 2)) return false;
+
+  // あまりに一般的/抽象的な答えは捨てる
+  if (/^(重要|大事|必要|不要|はい|いいえ)$/.test(a)) return false;
+
+  // 句読点だけ、記号だけは捨てる
+  if (/^[\W_]+$/.test(q) || /^[\W_]+$/.test(a)) return false;
+
+  return true;
+}
+
+function dedupeCandidates(cands) {
+  const seen = new Set();
+  const out = [];
+
+  for (const c of cands) {
+    const key = normalizeKey(c.question);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
+function normalizeKey(s) {
+  return String(s || "")
+    .replace(/^【.+?】/g, "") // 見出しは重複判定から除外
+    .replace(/\s+/g, "")
+    .replace(/[「」『』（）()［］\[\]【】]/g, "")
+    .slice(0, 120);
+}
+
+function pickWithVariety(cands, limit, allowTF) {
+  if (!allowTF) return cands.slice(0, limit);
+
+  const tf = [];
+  const other = [];
+  for (const c of cands) {
+    if (c.type === "tf") tf.push(c);
+    else other.push(c);
+  }
+
+  // TFは最大20%くらいに抑える
+  const tfLimit = Math.max(0, Math.floor(limit * 0.2));
+  const picked = [];
+
+  picked.push(...other.slice(0, limit - tfLimit));
+  picked.push(...tf.slice(0, tfLimit));
+
+  // もし足りなければ補充
+  if (picked.length < limit) {
+    const remain = cands.filter(x => !picked.includes(x));
+    picked.push(...remain.slice(0, limit - picked.length));
+  }
+
+  return picked.slice(0, limit);
+}
 
 // クイズ1件の編集（作者のみ）
 app.patch("/api/quizzes/:quizId", requireLogin, wrap(async (req, res) => {
@@ -999,3 +1406,4 @@ app.delete("/api/communities/:id", requireLogin, wrap(async (req, res) => {
     conn.release();
   }
 }));
+

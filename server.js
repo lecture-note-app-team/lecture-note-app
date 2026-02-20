@@ -88,6 +88,23 @@ const sessionStore = new MySQLStore(
   sessionDb
 );
 
+app.use(
+  session({
+    name: "sid",
+    secret: process.env.SESSION_SECRET || "dev_secret_change_me",
+    resave: false,
+    saveUninitialized: false,
+    store: sessionStore,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production", // Railway本番はtrue
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7日
+    },
+  })
+);
+
+
 // リクエストログ（必要なら消してOK）
 app.use((req, res, next) => {
   console.log("REQ:", req.method, req.path);
@@ -395,11 +412,7 @@ app.get("/", (req, res) => {
 // ---------- Auth APIs ----------
 app.get("/api/me", (req, res) => {
   if (!req.session?.userId) return res.json({ loggedIn: false });
-  res.json({
-    loggedIn: true,
-    userId: req.session.userId,
-    username: req.session.username,
-  });
+  res.json({ loggedIn: true, id: req.session.userId, username: req.session.username });
 });
 
 app.post("/api/register", wrap(async (req, res) => {

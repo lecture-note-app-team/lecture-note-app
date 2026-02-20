@@ -293,4 +293,36 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("communitySearchQ")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") searchCommunities();
   });
+
+
+  // ★追加：mypage用（要素がある時だけ表示）
+  renderMyCommunities();
 });
+
+// ===== マイページ：参加中コミュニティ表示 =====
+async function renderMyCommunities() {
+  const box = $("myCommunities");
+  if (!box) return; // mypage.html以外では何もしない
+
+  box.innerHTML = `<div class="muted">読み込み中...</div>`;
+
+  try {
+    const list = await api("/api/communities/mine"); // ← サーバーはOK確認済み
+    if (!Array.isArray(list) || list.length === 0) {
+      box.innerHTML = `<div class="muted">（参加中コミュニティはありません）</div>`;
+      return;
+    }
+
+    box.innerHTML = list.map(c => `
+      <div class="card" style="margin:10px 0;">
+        <div><strong>${escapeHtml(c.name)}</strong></div>
+        <div class="small">
+          役割：${escapeHtml(c.role || "")}
+          / メンバー数：${Number(c.member_count ?? 0)}
+        </div>
+      </div>
+    `).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="error">取得失敗：${escapeHtml(e.message)}</div>`;
+  }
+}

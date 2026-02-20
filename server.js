@@ -188,22 +188,22 @@ function buildMarkdown({ course_name, lecture_no, lecture_date, title, body_raw 
 - 回：${lecture_no}
 - 日付：${lecture_date}
 
-## 重要ポイント
+## 重要ポイント：★
 ${important.length ? important.map((x) => `- ${x}`).join("\n") : "- （なし）"}
 
 ## 本文
 ${main.map((x) => `- ${x}`).join("\n")}
 
-## 用語集
+## 用語集：用語
 ${terms.length ? terms.map((x) => `- ${x}`).join("\n") : "- （なし）"}
 
-## 疑問・確認したいこと
+## 疑問・確認したいこと：？
 ${questions.length ? questions.map((x) => `- ${x}`).join("\n") : "- （なし）"}
 
-## TODO・課題
+## TODO・課題：課題
 ${todos.length ? todos.map((x) => `- ${x}`).join("\n") : "- （なし）"}
 
-## まとめ
+## まとめ：まとめ
 - （あとで追記）
 `.trim();
 }

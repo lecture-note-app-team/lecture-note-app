@@ -384,3 +384,79 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("DOMContentLoaded", () => {
   loadJoinRequestApprovals();
 });
+
+// ===== 非公開コミュニティ検索（参加申請つき）=====
+
+async function searchCommunities() {
+  const qEl = document.getElementById("communitySearchQ");
+  const box = document.getElementById("communitySearchResult");
+  if (!qEl || !box) return; // mypage以外で動いても落ちない
+
+  const q = qEl.value.trim();
+  if (!q) {
+    box.innerHTML = `<div class="muted">検索ワードを入力してね</div>`;
+    return;
+  }
+
+  box.innerHTML = `<div class="muted">検索中...</div>`;
+
+  try {
+    const data = await api(`/api/communities?q=${encodeURIComponent(q)}`);
+    const list = data.communities || [];
+
+    if (!list.length) {
+      box.innerHTML = `<div class="muted">見つかりませんでした</div>`;
+      return;
+    }
+
+    box.innerHTML = list.map(c => {
+      const member = Number(c.is_member || 0) === 1;
+      const pending = Number(c.has_pending || 0) === 1;
+
+      let right = "";
+      if (member) right = `<span class="muted">参加済み</span>`;
+      else if (pending) right = `<span class="muted">申請済み</span>`;
+      else right = `<button data-req="${c.id}">参加申請</button>`;
+
+      return `
+        <div class="item" style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+          <div class="title">${escapeHtml(c.name)}</div>
+          <div>${right}</div>
+        </div>
+      `;
+    }).join("");
+
+    // 申請ボタン
+    box.querySelectorAll("button[data-req]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const communityId = Number(btn.dataset.req);
+        const message = prompt("参加申請メッセージ（任意）") || "";
+        btn.disabled = true;
+
+        try {
+          await api(`/api/communities/${communityId}/join-requests`, {
+            method: "POST",
+            body: JSON.stringify({ message }),
+          });
+          btn.outerHTML = `<span class="muted">申請済み</span>`;
+        } catch (e) {
+          alert(e.message || "申請に失敗しました");
+          btn.disabled = false;
+        }
+      });
+    });
+
+  } catch (e) {
+    box.innerHTML = `<div class="error">${escapeHtml(e.message || "検索に失敗")}</div>`;
+  }
+}
+
+// イベント紐付け（検索ボタン/Enter）
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("communitySearchBtn");
+  const qEl = document.getElementById("communitySearchQ");
+  if (btn) btn.addEventListener("click", searchCommunities);
+  if (qEl) qEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") searchCommunities();
+  });
+});

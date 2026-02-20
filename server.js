@@ -561,6 +561,32 @@ app.get("/api/communities/mine", requireLogin, wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// コミュ削除（解散）: 管理者のみ
+app.delete("/api/communities/:id", requireLogin, wrap(async (req, res) => {
+  const communityId = Number(req.params.id);
+  const userId = req.session.userId;
+
+  if (!communityId) return res.status(400).json({ message: "invalid community id" });
+
+  // 自分がそのコミュの admin か確認
+  const [rows] = await pool.query(
+    `SELECT role
+       FROM user_communities
+      WHERE user_id = ? AND community_id = ?
+      LIMIT 1`,
+    [userId, communityId]
+  );
+
+  if (!rows.length) return res.status(403).json({ message: "not a member" });
+  if (rows[0].role !== "admin") return res.status(403).json({ message: "admin only" });
+
+  // communities を削除（user_communitiesはCASCADE, notes.community_idはSET NULL）
+  const [r] = await pool.query("DELETE FROM communities WHERE id = ? LIMIT 1", [communityId]);
+  if (r.affectedRows === 0) return res.status(404).json({ message: "community not found" });
+
+  res.json({ ok: true, deleted: communityId });
+}));
+
 // ---------- Notes APIs ----------
 
 // 公開一覧（誰でも閲覧OK）: 大学名必須、授業名(course)は任意、publicのみ表示

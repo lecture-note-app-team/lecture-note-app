@@ -254,15 +254,16 @@ async function loadCommunitiesOnMyPage(){
     const isAdmin = c.role === "admin";
     const roleLabel = isAdmin ? "管理者" : "メンバー";
 
-      li.innerHTML = `
-        ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")}
-        <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px;">
-          ${roleLabel}
-        </span>
-        ${isAdmin ? `<button data-delete-comm="${c.id}" style="margin-left:8px;">削除（解散）</button>` : ""}
-        <button data-leave-comm="${c.id}" style="margin-left:8px;">退会</button>
-
-      `;
+    li.innerHTML = `
+      ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")}
+      <span style="margin-left:6px; font-size:12px; color:#666;">
+        👥 ${Number(c.member_count || 0)}人
+      </span>
+      <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px;">
+        ${roleLabel}
+      </span>
+      ${isAdmin ? `<button data-delete-comm="${c.id}" style="margin-left:8px;">削除（解散）</button>` : ""}
+    `;
 
       ul.appendChild(li);
     }
@@ -326,8 +327,10 @@ if ($("btnReloadCommunities")){
   $("btnReloadCommunities").addEventListener("click", loadCommunitiesOnMyPage);
 }
 
-// ページ表示時に読み込み
-loadCommunitiesOnMyPage();
+// ページ表示時に読み込み（DOMができてから）
+document.addEventListener("DOMContentLoaded", () => {
+  loadCommunitiesOnMyPage();
+});
 
 async function loadJoinRequestApprovals() {
   const box = document.getElementById("joinRequestApprovals");

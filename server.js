@@ -931,3 +931,45 @@ console.log("BOOT: about to listen...");
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+async function isCommunityAdmin(userId, communityId) {
+  const [rows] = await pool.query(
+    `SELECT 1
+       FROM user_communities
+      WHERE user_id = ? AND community_id = ? AND role='admin'
+      LIMIT 1`,
+    [userId, communityId]
+  );
+  return rows.length > 0;
+}
+
+app.delete("/api/communities/:id", requireLogin, wrap(async (req, res) => {
+  const communityId = Number(req.params.id);
+  if (!communityId) return res.status(400).json({ message: "invalid id" });
+
+  const userId = req.session.userId;
+  const admin = await isCommunityAdmin(userId, communityId);
+  if (!admin) return res.status(403).json({ message: "admin only" });
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // ① 先にコミュ内ノート削除（note_quizzes はCASCADEで消える）
+    await conn.query(`DELETE FROM notes WHERE community_id = ?`, [communityId]);
+
+    // ② user_communities は communities削除でCASCADEでも消えるが、先に消してもOK
+    // await conn.query(`DELETE FROM user_communities WHERE community_id = ?`, [communityId]);
+
+    // ③ コミュ本体削除（ここで user_communities はCASCADE）
+    await conn.query(`DELETE FROM communities WHERE id = ?`, [communityId]);
+
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}));

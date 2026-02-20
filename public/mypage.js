@@ -225,3 +225,89 @@ async function loadCommunityNotes() {
   await loadMyNotes();
   await loadCommunityNotes(); // ★追加
 })();
+
+function $(id){ return document.getElementById(id); }
+
+function escapeHtml(s){
+  return String(s)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+async function loadCommunitiesOnMyPage(){
+  const ul = $("communitiesList");
+  if (!ul) return; // UIを置いてないなら何もしない
+
+  ul.innerHTML = "<li>読み込み中…</li>";
+
+  try{
+    const me = await api("/api/me");
+    if (!me.loggedIn){
+      ul.innerHTML = "<li>ログインしてください。</li>";
+      return;
+    }
+
+    const list = await api("/api/communities/mine");
+
+    if (!list || list.length === 0){
+      ul.innerHTML = "<li>（参加中コミュニティはありません）</li>";
+      return;
+    }
+
+    ul.innerHTML = "";
+    for (const c of list){
+      const li = document.createElement("li");
+
+      const isAdmin = c.role === "admin";
+      li.innerHTML = `
+        ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")}
+        <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px;">
+          ${escapeHtml(c.role || "member")}
+        </span>
+        ${isAdmin ? `<button data-delete-comm="${c.id}" style="margin-left:8px;">削除（解散）</button>` : ""}
+      `;
+
+      ul.appendChild(li);
+    }
+
+    // 削除ボタンのイベント（まとめて）
+    ul.querySelectorAll('button[data-delete-comm]').forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.getAttribute("data-delete-comm"));
+        if (!id) return;
+
+        const ok = confirm(
+          `コミュニティ(ID:${id})を削除します。\n` +
+          `※コミュ内ノートも全削除されます（元に戻せません）。\n\n本当に削除しますか？`
+        );
+        if (!ok) return;
+
+        try{
+          btn.disabled = true;
+          btn.textContent = "削除中…";
+          await api(`/api/communities/${id}`, { method: "DELETE" });
+          alert("削除しました");
+          await loadCommunitiesOnMyPage();
+        } catch (e){
+          alert("削除失敗: " + e.message);
+          btn.disabled = false;
+          btn.textContent = "削除（解散）";
+        }
+      });
+    });
+
+  } catch(e){
+    ul.innerHTML = `<li>取得失敗: ${escapeHtml(e.message)}</li>`;
+  }
+}
+
+// 更新ボタン
+if ($("btnReloadCommunities")){
+  $("btnReloadCommunities").addEventListener("click", loadCommunitiesOnMyPage);
+}
+
+// ページ表示時に読み込み
+loadCommunitiesOnMyPage();

@@ -417,6 +417,28 @@ async function userRoleInCommunity(userId, communityId) {
   return rows.length ? rows[0].role : null; // 'admin' | 'member' | null
 }
 
+// 自分の参加コミュ一覧（コミュ名 + メンバー数つき）
+app.get("/api/communities/mine", requireLogin, wrap(async (req, res) => {
+  const userId = req.session.userId;
+
+  const [rows] = await pool.query(
+    `SELECT
+        c.id,
+        c.name AS name,
+        uc.role,
+        uc.joined_at,
+        (SELECT COUNT(*) FROM user_communities uc2 WHERE uc2.community_id = c.id) AS member_count
+     FROM user_communities uc
+     JOIN communities c ON c.id = uc.community_id
+     WHERE uc.user_id = ?
+     ORDER BY uc.joined_at DESC`,
+    [userId]
+  );
+
+  res.json(rows);
+}));
+
+
 // ---------- Routes: Health & Top ----------
 app.get("/health", (req, res) => res.status(200).send("ok"));
 

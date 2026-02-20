@@ -303,3 +303,84 @@ if ($("btnReloadCommunities")){
 
 // ページ表示時に読み込み
 loadCommunitiesOnMyPage();
+
+async function loadJoinRequestApprovals() {
+  const box = document.getElementById("joinRequestApprovals");
+  if (!box) return;
+
+  box.innerHTML = `<div class="muted">読み込み中...</div>`;
+
+  try {
+    // 既存：自分の参加コミュ一覧（あなたのserver.jsにある）
+    const myComms = await api("/api/communities/mine");
+
+    if (!Array.isArray(myComms) || myComms.length === 0) {
+      box.innerHTML = `<div class="muted">所属コミュニティがありません</div>`;
+      return;
+    }
+
+    // 参加コミュごとのpending申請を取得
+    const groups = [];
+    for (const c of myComms) {
+      try {
+        const data = await api(`/api/communities/${c.id}/join-requests`);
+        const reqs = data.requests || [];
+        if (reqs.length) groups.push({ community: c, requests: reqs });
+      } catch {
+        // member/adminじゃないコミュはここで弾かれる（表示しない）
+      }
+    }
+
+    if (!groups.length) {
+      box.innerHTML = `<div class="muted">承認待ちの申請はありません</div>`;
+      return;
+    }
+
+    box.innerHTML = groups.map(g => `
+      <div class="card" style="margin-top:10px;">
+        <div class="title" style="margin-bottom:8px;">${escapeHtml(g.community.name)}</div>
+        ${g.requests.map(r => `
+          <div class="item" style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+            <div>
+              <div><b>${escapeHtml(r.username)}</b></div>
+              <div class="muted">${escapeHtml(r.message || "")}</div>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <button data-decide="approve" data-reqid="${r.id}">承認</button>
+              <button data-decide="reject" data-reqid="${r.id}">却下</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `).join("");
+
+  } catch (e) {
+    box.innerHTML = `<div class="error">${escapeHtml(e.message || "読み込みに失敗")}</div>`;
+  }
+}
+
+// 承認/却下（イベント委譲）
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-decide][data-reqid]");
+  if (!btn) return;
+
+  const action = btn.dataset.decide;
+  const requestId = Number(btn.dataset.reqid);
+
+  btn.disabled = true;
+  try {
+    await api(`/api/join-requests/${requestId}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    await loadJoinRequestApprovals(); // 再描画
+  } catch (err) {
+    alert(err.message || "操作に失敗しました");
+    btn.disabled = false;
+  }
+});
+
+// mypage.html を開いたら読み込む
+document.addEventListener("DOMContentLoaded", () => {
+  loadJoinRequestApprovals();
+});

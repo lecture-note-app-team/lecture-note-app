@@ -258,3 +258,130 @@ $("communitySearchBtn").addEventListener("click", searchCommunities);
 $("communitySearchQ").addEventListener("keydown", (e) => {
   if (e.key === "Enter") searchCommunities();
 });
+
+app.get("/api/communities/:id/join-requests", requireLogin, wrap(async (req, res) => {
+  const communityId = Number(req.params.id);
+  const userId = req.session.userId;
+
+  const role = await userRoleInCommunity(userId, communityId);
+  if (!role) return res.status(403).json({ message: "members only" }); // member/adminのみ閲覧
+
+  const [rows] = await pool.query(
+    `SELECT r.id, r.user_id, u.username, r.message, r.status, r.created_at
+       FROM community_join_requests r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.community_id = ? AND r.status = 'pending'
+      ORDER BY r.created_at ASC`,
+    [communityId]
+  );
+
+  res.json({ requests: rows });
+}));
+
+app.post("/api/join-requests/:requestId/decide", requireLogin, wrap(async (req, res) => {
+  const requestId = Number(req.params.requestId);
+  const action = String(req.body?.action || ""); // 'approve' or 'reject'
+  const deciderId = req.session.userId;
+
+  if (!requestId) return res.status(400).json({ message: "invalid request id" });
+  if (!["approve", "reject"].includes(action)) {
+    return res.status(400).json({ message: "invalid action" });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 申請をロックして取得
+    const [rrows] = await conn.query(
+      `SELECT id, community_id, user_id, status
+         FROM community_join_requests
+        WHERE id = ?
+        FOR UPDATE`,
+      [requestId]
+    );
+    if (!rrows.length) return res.status(404).json({ message: "not found" });
+
+    const reqRow = rrows[0];
+    if (reqRow.status !== "pending") {
+      return res.status(400).json({ message: "already decided" });
+    }
+
+    // 決裁者がそのコミュの member/admin か
+    const [uroleRows] = await conn.query(
+      `SELECT role FROM user_communities
+        WHERE user_id = ? AND community_id = ?
+        LIMIT 1`,
+      [deciderId, reqRow.community_id]
+    );
+    if (!uroleRows.length) return res.status(403).json({ message: "members only" });
+
+    if (action === "approve") {
+      // 所属追加（重複してもOKにしたいなら IGNORE）
+      await conn.query(
+        `INSERT IGNORE INTO user_communities (user_id, community_id, role)
+         VALUES (?, ?, 'member')`,
+        [reqRow.user_id, reqRow.community_id]
+      );
+
+      await conn.query(
+        `UPDATE community_join_requests
+            SET status='approved', decided_at=NOW(), decided_by=?
+          WHERE id=?`,
+        [deciderId, requestId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE community_join_requests
+            SET status='rejected', decided_at=NOW(), decided_by=?
+          WHERE id=?`,
+        [deciderId, requestId]
+      );
+    }
+
+    await conn.commit();
+    res.json({ ok: true, action });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}));
+
+box.innerHTML = list.map(c => {
+  const member = Number(c.is_member) === 1;
+  const pending = Number(c.has_pending) === 1;
+
+  let right = "";
+  if (member) right = `<span class="muted">参加済み</span>`;
+  else if (pending) right = `<span class="muted">申請済み</span>`;
+  else right = `<button data-req="${c.id}">参加申請</button>`;
+
+  return `
+    <div class="item" style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+      <div class="title">${escapeHtml(c.name)}</div>
+      <div>${right}</div>
+    </div>
+  `;
+}).join("");
+
+// 申請ボタンのイベント
+box.querySelectorAll("button[data-req]").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const communityId = Number(btn.dataset.req);
+    const message = prompt("参加申請メッセージ（任意）") || "";
+    btn.disabled = true;
+
+    try {
+      await api(`/api/communities/${communityId}/join-requests`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      });
+      btn.outerHTML = `<span class="muted">申請済み</span>`;
+    } catch (e) {
+      alert(e.message);
+      btn.disabled = false;
+    }
+  });
+});

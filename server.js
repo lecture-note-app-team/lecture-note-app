@@ -125,6 +125,18 @@ const pool = mysqlPromise.createPool({
   connectionLimit: 10,
 });
 
+// --------権限チェック関数-------(admin/memberが承認OK)
+async function userRoleInCommunity(userId, communityId) {
+  const [rows] = await pool.query(
+    `SELECT role
+       FROM user_communities
+      WHERE user_id = ? AND community_id = ?
+      LIMIT 1`,
+    [userId, communityId]
+  );
+  return rows.length ? rows[0].role : null; // 'admin' | 'member' | null
+}
+
 // ---------- Helpers ----------
 function requireLogin(req, res, next) {
   if (!req.session?.userId) {
@@ -394,6 +406,17 @@ ${body}
     }));
 }
 
+async function userRoleInCommunity(userId, communityId) {
+  const [rows] = await pool.query(
+    `SELECT role
+       FROM user_communities
+      WHERE user_id = ? AND community_id = ?
+      LIMIT 1`,
+    [userId, communityId]
+  );
+  return rows.length ? rows[0].role : null; // 'admin' | 'member' | null
+}
+
 // ---------- Routes: Health & Top ----------
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
@@ -483,6 +506,94 @@ app.use((err, req, res, next) => {
   res.status(500).send("Server Error");
 });
 
+// 参加申請一覧（pending）: そのコミュの member/admin が見れる
+app.get("/api/communities/:id/join-requests", requireLogin, wrap(async (req, res) => {
+  const communityId = Number(req.params.id);
+  const userId = req.session.userId;
+
+  if (!communityId) return res.status(400).json({ message: "invalid community id" });
+
+  const role = await userRoleInCommunity(userId, communityId);
+  if (!role) return res.status(403).json({ message: "members only" });
+
+  const [rows] = await pool.query(
+    `SELECT r.id, r.user_id, u.username, r.message, r.created_at
+       FROM community_join_requests r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.community_id = ? AND r.status = 'pending'
+      ORDER BY r.created_at ASC`,
+    [communityId]
+  );
+
+  res.json({ requests: rows });
+}));
+
+app.post("/api/join-requests/:requestId/decide", requireLogin, wrap(async (req, res) => {
+  const requestId = Number(req.params.requestId);
+  const action = String(req.body?.action || ""); // 'approve' | 'reject'
+  const deciderId = req.session.userId;
+
+  if (!requestId) return res.status(400).json({ message: "invalid request id" });
+  if (!["approve", "reject"].includes(action)) {
+    return res.status(400).json({ message: "invalid action" });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rrows] = await conn.query(
+      `SELECT id, community_id, user_id, status
+         FROM community_join_requests
+        WHERE id = ?
+        FOR UPDATE`,
+      [requestId]
+    );
+    if (!rrows.length) return res.status(404).json({ message: "not found" });
+
+    const reqRow = rrows[0];
+    if (reqRow.status !== "pending") return res.status(400).json({ message: "already decided" });
+
+    const [urole] = await conn.query(
+      `SELECT role
+         FROM user_communities
+        WHERE user_id = ? AND community_id = ?
+        LIMIT 1`,
+      [deciderId, reqRow.community_id]
+    );
+    if (!urole.length) return res.status(403).json({ message: "members only" });
+
+    if (action === "approve") {
+      await conn.query(
+        `INSERT IGNORE INTO user_communities (user_id, community_id, role)
+         VALUES (?, ?, 'member')`,
+        [reqRow.user_id, reqRow.community_id]
+      );
+
+      await conn.query(
+        `UPDATE community_join_requests
+            SET status='approved', decided_at=NOW(), decided_by=?
+          WHERE id=?`,
+        [deciderId, requestId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE community_join_requests
+            SET status='rejected', decided_at=NOW(), decided_by=?
+          WHERE id=?`,
+        [deciderId, requestId]
+      );
+    }
+
+    await conn.commit();
+    res.json({ ok: true, action });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}));
 
 // ---------- Communities APIs (B方式) ----------
 
@@ -1408,20 +1519,54 @@ app.delete("/api/communities/:id", requireLogin, wrap(async (req, res) => {
 }));
 
 // コミュニティ検索（ログイン必須にするなら requireLogin を付ける）
-app.get("/api/communities", wrap(async (req, res) => {
+app.get("/api/communities", requireLogin, wrap(async (req, res) => {
   const q = String(req.query.q || "").trim();
   if (!q) return res.json({ communities: [] });
 
   const like = `%${q}%`;
+  const userId = req.session.userId;
 
   const [rows] = await pool.query(
-    `SELECT id, name, slug, created_at
-       FROM communities
-      WHERE name LIKE ?
-      ORDER BY name ASC
-      LIMIT 50`,
-    [like]
+    `SELECT
+        c.id, c.name, c.slug, c.created_at,
+        CASE WHEN uc.user_id IS NULL THEN 0 ELSE 1 END AS is_member,
+        CASE WHEN r.id IS NULL THEN 0 ELSE 1 END AS has_pending
+     FROM communities c
+     LEFT JOIN user_communities uc
+       ON uc.community_id = c.id AND uc.user_id = ?
+     LEFT JOIN community_join_requests r
+       ON r.community_id = c.id AND r.user_id = ? AND r.status = 'pending'
+     WHERE c.name LIKE ?
+     ORDER BY c.name ASC
+     LIMIT 50`,
+    [userId, userId, like]
   );
 
   res.json({ communities: rows });
+}));
+
+//--------参加申請API--------
+app.post("/api/communities/:id/join-requests", requireLogin, wrap(async (req, res) => {
+  const communityId = Number(req.params.id);
+  const userId = req.session.userId;
+  const message = String(req.body?.message || "").trim().slice(0, 500);
+
+  if (!communityId) return res.status(400).json({ message: "invalid community id" });
+
+  // すでに所属してたらNG
+  const role = await userRoleInCommunity(userId, communityId);
+  if (role) return res.status(400).json({ message: "already a member" });
+
+  // 申請作成（pending重複はUNIQUEで防ぐ）
+  try {
+    const [r] = await pool.query(
+      `INSERT INTO community_join_requests (community_id, user_id, message, status)
+       VALUES (?, ?, ?, 'pending')`,
+      [communityId, userId, message || null]
+    );
+    res.status(201).json({ ok: true, request_id: r.insertId });
+  } catch (e) {
+    // たぶん pending重複
+    return res.status(400).json({ message: "already requested" });
+  }
 }));

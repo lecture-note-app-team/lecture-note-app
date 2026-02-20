@@ -299,29 +299,6 @@ async function loadCommunitiesOnMyPage(){
   }
 }
 
-// 退会ボタンのイベント
-ul.querySelectorAll('button[data-leave-comm]').forEach(btn => {
-  btn.addEventListener("click", async () => {
-    const id = Number(btn.getAttribute("data-leave-comm"));
-    if (!id) return;
-
-    const ok = confirm(`コミュニティ(ID:${id})を退会しますか？\n※コミュ内ノートが見られなくなります`);
-    if (!ok) return;
-
-    try {
-      btn.disabled = true;
-      btn.textContent = "退会中…";
-      await api(`/api/communities/${id}/leave`, { method: "POST" });
-      alert("退会しました");
-      await loadCommunitiesOnMyPage();
-    } catch (e) {
-      alert("退会失敗: " + e.message);
-      btn.disabled = false;
-      btn.textContent = "退会";
-    }
-  });
-});
-
 // 更新ボタン
 if ($("btnReloadCommunities")){
   $("btnReloadCommunities").addEventListener("click", loadCommunitiesOnMyPage);
@@ -489,32 +466,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-async function renderMyCommunities() {
-  const ul = document.getElementById("communitiesList");
-  if (!ul) return;
-
-  ul.innerHTML = `<li class="muted">読み込み中...</li>`;
-
-  try {
-    const list = await api("/api/communities/mine"); // member_count付きのAPIなら表示できる
-    if (!Array.isArray(list) || list.length === 0) {
-      ul.innerHTML = `<li class="muted">（参加中コミュニティはありません）</li>`;
-      return;
-    }
-
-    ul.innerHTML = list.map(c => `
-      <li style="margin:6px 0;">
-        <strong>${escapeHtml(c.name)}</strong>
-        <span class="small">（役割：${escapeHtml(c.role || "")} / メンバー数：${Number(c.member_count ?? 0)}）</span>
-      </li>
-    `).join("");
-  } catch (e) {
-    ul.innerHTML = `<li class="error">取得失敗：${escapeHtml(e.message || "error")}</li>`;
-  }
-}
-
 document.addEventListener("DOMContentLoaded", () => {
-  renderMyCommunities();
-  document.getElementById("btnReloadCommunities")?.addEventListener("click", renderMyCommunities);
-});
+  loadCommunitiesOnMyPage();
+  loadJoinRequestApprovals();
 
+  // 更新ボタン
+  document.getElementById("btnReloadCommunities")
+    ?.addEventListener("click", loadCommunitiesOnMyPage);
+});

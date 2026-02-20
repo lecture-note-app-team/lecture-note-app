@@ -247,9 +247,6 @@ async function searchCommunities() {
       <div class="item">
         <div class="title">${escapeHtml(c.name)}</div>
         <div class="muted">${escapeHtml(c.description || "")}</div>
-        <div style="margin-top:6px;">
-          <a href="/community.html?id=${c.id}">開く</a>
-        </div>
       </div>
     `).join("");
   } catch (e) {

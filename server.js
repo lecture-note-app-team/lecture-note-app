@@ -336,17 +336,6 @@ ${body}
     }));
 }
 
-async function userRoleInCommunity(userId, communityId) {
-  const [rows] = await pool.query(
-    `SELECT role
-       FROM user_communities
-      WHERE user_id = ? AND community_id = ?
-      LIMIT 1`,
-    [userId, communityId]
-  );
-  return rows.length ? rows[0].role : null; // 'admin' | 'member' | null
-}
-
 // 自分の参加コミュ一覧（コミュ名 + メンバー数つき）
 app.get("/api/communities/mine", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;

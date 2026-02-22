@@ -73,6 +73,10 @@ async function deleteNote(noteId, title) {
   }
 }
 
+function editNote(noteId) {
+  location.href = "/edit_note.html?id=" + encodeURIComponent(noteId) + "&from=" + encodeURIComponent("/mypage.html");
+}
+
 async function changeVisibility(noteId, currentVisibility, title) {
   const next = nextVisibility(currentVisibility);
   const msg = next === "private"
@@ -145,6 +149,7 @@ async function loadMyNotes() {
         <div class="row" style="margin-top:8px;">
           <button class="btnOpen">開く</button>
           <button class="btnToggle">${toggleButtonText(n.visibility)}</button>
+          <button class="btnEdit">編集</button>
           <button class="btnDelete">削除</button>
         </div>
       `;
@@ -160,6 +165,10 @@ async function loadMyNotes() {
 
       div.querySelector(".btnDelete").addEventListener("click", () => {
         deleteNote(n.id, n.title);
+      });
+
+      div.querySelector(".btnEdit").addEventListener("click", () => {
+        editNote(n.id);
       });
 
       listEl.appendChild(div);

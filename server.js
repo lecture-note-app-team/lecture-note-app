@@ -52,6 +52,31 @@ function getOpenAIClient() {
 
 const app = express();
 
+
+function buildDbConfig() {
+  const dbUrl = process.env.DATABASE_URL || process.env.MYSQL_URL || "";
+  if (dbUrl) {
+    return {
+      uri: dbUrl,
+      waitForConnections: true,
+      connectionLimit: 10,
+    };
+  }
+
+  const host = process.env.DB_HOST === "localhost" ? "127.0.0.1" : process.env.DB_HOST;
+  return {
+    host,
+    port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+  };
+}
+
+const dbConfig = buildDbConfig();
+
 // Railwayなどプロキシ配下
 if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1);
@@ -62,13 +87,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // ---------- Session Store ----------
-const sessionDb = mysql2.createPool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-});
+const sessionDb = mysql2.createPool(dbConfig);
 
 const sessionStore = new MySQLStore(
   {
@@ -115,15 +134,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------- DB Pool ----------
-const pool = mysqlPromise.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: Number(process.env.DB_PORT || 3306),
-  waitForConnections: true,
-  connectionLimit: 10,
-});
+const pool = mysqlPromise.createPool(dbConfig);
 
 // --------権限チェック関数-------(admin/memberが承認OK)
 async function userRoleInCommunity(userId, communityId) {
@@ -238,7 +249,13 @@ async function getOrCreateUniversityId(name) {
 }
 
 async function getNoteById(noteId) {
-  const [rows] = await pool.query("SELECT * FROM notes WHERE id = ?", [noteId]);
+  const [rows] = await pool.query(
+    `SELECT n.*, u.name AS university_name
+       FROM notes n
+       LEFT JOIN universities u ON u.id = n.university_id
+      WHERE n.id = ?`,
+    [noteId]
+  );
   return rows.length ? rows[0] : null;
 }
 
@@ -791,6 +808,84 @@ app.delete("/api/notes/:id", requireLogin, wrap(async (req, res) => {
 
   // note_quizzes は ON DELETE CASCADE の場合自動で消える（無くても notes削除はOK）
   await pool.query("DELETE FROM notes WHERE id = ?", [noteId]);
+  res.json({ ok: true });
+}));
+
+// 自分のノート編集（ログイン必須・本人のみ）
+app.patch("/api/notes/:id", requireLogin, wrap(async (req, res) => {
+  const noteId = Number(req.params.id);
+  const note = await getNoteById(noteId);
+
+  const perm = canEditNote(req, note);
+  if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
+
+  const {
+    author_name,
+    course_name,
+    lecture_no,
+    lecture_date,
+    title,
+    body_raw,
+    university_name,
+    community_id,
+    visibility,
+  } = req.body || {};
+
+  const communityId = community_id ? Number(community_id) : null;
+
+  if (!course_name || !lecture_no || !lecture_date || !title || !body_raw) {
+    return res.status(400).json({ message: "missing fields" });
+  }
+
+  if (communityId) {
+    const belongs = await userBelongsToCommunity(req.session.userId, communityId);
+    if (!belongs) return res.status(403).json({ message: "not a community member" });
+  }
+
+  const nextUniversityName = String(university_name || "").trim() || (communityId ? "（コミュ）" : "");
+  if (!nextUniversityName) {
+    return res.status(400).json({ message: "university_name is required" });
+  }
+
+  const nextAuthor = String(author_name || "").trim() || null;
+  const nextVisibility = communityId ? "private" : normalizeVisibility(visibility);
+  const nextUniversityId = await getOrCreateUniversityId(nextUniversityName);
+  const body_md = buildMarkdown({
+    course_name,
+    lecture_no,
+    lecture_date,
+    title,
+    body_raw,
+  });
+
+  await pool.query(
+    `UPDATE notes
+        SET community_id = ?,
+            visibility = ?,
+            university_id = ?,
+            author_name = ?,
+            course_name = ?,
+            lecture_no = ?,
+            lecture_date = ?,
+            title = ?,
+            body_raw = ?,
+            body_md = ?
+      WHERE id = ?`,
+    [
+      communityId,
+      nextVisibility,
+      nextUniversityId,
+      nextAuthor,
+      course_name,
+      lecture_no,
+      lecture_date,
+      title,
+      body_raw,
+      body_md,
+      noteId,
+    ]
+  );
+
   res.json({ ok: true });
 }));
 

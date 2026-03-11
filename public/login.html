@@ -29,6 +29,24 @@
     </div>
   </div>
 
+
+
+  <div class="card">
+    <div class="row2" style="justify-content:space-between; align-items:flex-start;">
+      <div>
+        <h2 style="margin:0 0 6px;">プラン（Free / Pro）</h2>
+        <div class="small">Pro登録でPDF出力などの有料機能が使えます。</div>
+      </div>
+      <button id="btnReloadBilling">更新</button>
+    </div>
+    <div id="billingMessage" class="small" style="margin-top:8px;">読み込み中…</div>
+    <ul id="billingFeatures" class="list"></ul>
+    <div class="row" style="margin-top:8px;">
+      <button id="btnSubscribePro" class="btn-pro">Proプランに登録</button>
+      <button id="btnOpenPortal">請求管理を開く</button>
+    </div>
+  </div>
+
   <div class="two">
     <div class="card">
       <h2>新規登録</h2>
@@ -175,6 +193,7 @@
         const me = await api("/api/me");
         if (!me.loggedIn){
           renderCommunities([]);
+          await refreshBilling(false);
           return;
         }
         const list = await api("/api/communities/mine");
@@ -185,6 +204,59 @@
       }
     }
 
+
+    function setBillingButtonsDisabled(disabled){
+      $("btnReloadBilling").disabled = disabled;
+      $("btnSubscribePro").disabled = disabled;
+      $("btnOpenPortal").disabled = disabled;
+    }
+
+    function renderBillingFeatures(features = {}){
+      const rows = [
+        `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
+        `AI要約: 月 ${Number(features.ai_summary_monthly_limit || 0)} 回`,
+        `クイズ生成: 月 ${Number(features.quiz_generation_monthly_limit || 0)} 回`,
+        `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
+      ];
+      $("billingFeatures").innerHTML = rows.map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+    }
+
+    async function refreshBilling(loggedIn){
+      const msg = $("billingMessage");
+      if (!loggedIn){
+        msg.className = "small";
+        msg.textContent = "ログインすると現在プランを確認できます。";
+        renderBillingFeatures({});
+        setBillingButtonsDisabled(true);
+        return;
+      }
+
+      msg.className = "small";
+      msg.textContent = "課金情報を読み込み中…";
+
+      try {
+        const data = await api("/api/billing/me");
+        const planCode = data?.planCode || "free";
+        const isPro = planCode === "pro";
+
+        msg.className = `small ${isPro ? "billing-ok" : "billing-free"}`;
+        msg.textContent = isPro
+          ? "現在Proプランです。PDF出力などのPro機能が利用できます。"
+          : "現在Freeプランです。PDF出力はPro登録後に利用できます。";
+
+        renderBillingFeatures(data?.features || {});
+
+        $("btnSubscribePro").disabled = isPro;
+        $("btnSubscribePro").textContent = isPro ? "契約中（Pro）" : "Proプランに登録";
+        $("btnOpenPortal").disabled = false;
+        $("btnReloadBilling").disabled = false;
+      } catch (e) {
+        msg.className = "small";
+        msg.textContent = "課金情報の取得に失敗しました: " + e.message;
+        setBillingButtonsDisabled(false);
+      }
+    }
+
     async function refreshStatus() {
       try {
         const me = await api("/api/me");
@@ -192,15 +264,17 @@
           $("status").textContent = "未ログインです。";
           setDisabledForCommunityArea(true);
           renderCommunities([]);
+          await refreshBilling(false);
           return;
         }
         $("status").textContent = `ログイン中：${me.username}（id: ${me.id}）`;
         setDisabledForCommunityArea(false);
-        await refreshCommunities();
+        await Promise.all([refreshCommunities(), refreshBilling(true)]);
       } catch (e) {
         $("status").textContent = "状態取得に失敗：" + e.message;
         setDisabledForCommunityArea(true);
         renderCommunities([]);
+        await refreshBilling(false);
       }
     }
 
@@ -294,6 +368,31 @@
     $("btnReloadCommunities").addEventListener("click", async () => {
       clearCommunityMessages();
       await refreshCommunities();
+    });
+
+    $("btnReloadBilling").addEventListener("click", async () => {
+      const me = await api("/api/me");
+      await refreshBilling(Boolean(me.loggedIn));
+    });
+
+    $("btnSubscribePro").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/billing/checkout", { method: "POST" });
+        if (!data.url) throw new Error("遷移先URLが取得できませんでした");
+        location.href = data.url;
+      } catch (e) {
+        alert("Proプラン登録に進めませんでした: " + e.message);
+      }
+    });
+
+    $("btnOpenPortal").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/billing/portal", { method: "POST" });
+        if (!data.url) throw new Error("遷移先URLが取得できませんでした");
+        location.href = data.url;
+      } catch (e) {
+        alert("請求管理ページを開けませんでした: " + e.message);
+      }
     });
 
     refreshStatus();

@@ -57,19 +57,25 @@ async function generateQuizBatch(openai, params) {
 }
 
 async function regenerateMissingQuizzesIfNeeded(openai, params) {
-  const { targetCount } = params;
-  let all = [];
+  const { targetCount, cleanedText } = params;
+  let accepted = [];
+  let allReasons = [];
   let excluded = [];
-  for (let attempt = 0; attempt < 3 && all.length < targetCount; attempt++) {
+
+  for (let attempt = 0; attempt < 3 && accepted.length < targetCount; attempt++) {
     const batch = await generateQuizBatch(openai, {
       ...params,
-      count: targetCount - all.length,
+      count: targetCount - accepted.length,
       existingTopics: excluded,
     });
-    all = all.concat(batch);
-    excluded = all.map((q) => q.topic).filter(Boolean);
+
+    const { accepted: revalidated, reasons } = filterLowQualityQuizzes(accepted.concat(batch), cleanedText);
+    accepted = revalidated;
+    allReasons = allReasons.concat(reasons);
+    excluded = accepted.map((q) => q.topic).filter(Boolean);
   }
-  return all;
+
+  return { accepted, reasons: allReasons };
 }
 
 async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = 10, logger = console }) {
@@ -87,15 +93,13 @@ async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = 
   const points = await extractQuizPoints(openai, cleanedText);
   logger.info("quiz_pipeline:points", { count: points.length });
 
-  const generated = await regenerateMissingQuizzesIfNeeded(openai, {
+  const { accepted, reasons } = await regenerateMissingQuizzesIfNeeded(openai, {
     cleanedText,
     points,
     difficulty: "normal",
     targetCount,
   });
-  logger.info("quiz_pipeline:generated", { count: generated.length });
-
-  const { accepted, reasons } = filterLowQualityQuizzes(generated, cleanedText);
+  logger.info("quiz_pipeline:generated", { count: accepted.length + reasons.length });
   logger.info("quiz_pipeline:validated", {
     passed: accepted.length,
     dropped: reasons.length,

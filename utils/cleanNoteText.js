@@ -49,13 +49,24 @@ function cleanNoteText(noteText) {
   let total = 0;
   const picked = [];
   for (const p of paragraphs) {
-    if (total + p.length > MAX_CHARS) break;
-    picked.push(p);
-    total += p.length + 2;
+    const separatorLength = picked.length > 0 ? 2 : 0;
+    const remaining = MAX_CHARS - total - separatorLength;
+    if (remaining <= 0) break;
+
+    if (p.length <= remaining) {
+      picked.push(p);
+      total += separatorLength + p.length;
+      continue;
+    }
+
+    // 先頭段落が長すぎる場合でも、内容が空にならないように一部を残す
+    picked.push(p.slice(0, remaining));
+    total = MAX_CHARS;
+    break;
   }
 
   return {
-    cleanedText: picked.join("\n\n").trim(),
+    cleanedText: picked.join("\n\n").trim() || joined.slice(0, MAX_CHARS).trim(),
     wasTruncated: true,
   };
 }

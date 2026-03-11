@@ -45,6 +45,14 @@
     <div id="quizList" class="small"></div>
   </div>
 
+  <div class="card">
+    <h2>このノートに紐づく作成クイズ</h2>
+    <div class="row2" style="margin: 8px 0;">
+      <a id="createQuizForNoteLink" href="#">このノートに対してクイズを作る</a>
+    </div>
+    <div id="userQuizList" class="small"></div>
+  </div>
+
   <!-- marked（Markdown→HTML）とDOMPurify（XSS対策） -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
@@ -94,6 +102,22 @@
       }).join("");
     }
 
+    async function loadUserQuizzes(noteId) {
+      const list = document.getElementById("userQuizList");
+      list.textContent = "読み込み中...";
+      try {
+        const result = await api(`/api/notes/${noteId}/user-quizzes`);
+        const quizzes = result?.data?.quizzes || [];
+        if (!quizzes.length) {
+          list.textContent = "このノートに紐づく作成クイズはまだありません。";
+          return;
+        }
+        list.innerHTML = quizzes.map((q) => `<div style="margin:8px 0;">・${escapeHtml(q.title)} / ${escapeHtml(q.quiz_type)}</div>`).join("");
+      } catch (e) {
+        list.textContent = `表示できません: ${e.message}`;
+      }
+    }
+
     const params = new URLSearchParams(location.search);
     const id = params.get("id");
     const from = params.get("from"); // 戻り先を渡したい場合に使う
@@ -124,6 +148,10 @@
       document.getElementById("content").innerHTML = safe;
 
       await loadQuizzes(id);
+      await loadUserQuizzes(id);
+
+      const link = document.getElementById("createQuizForNoteLink");
+      link.href = `/create-quiz.html?note_id=${encodeURIComponent(id)}`;
 
       document.getElementById("btnReloadQuiz").addEventListener("click", () => loadQuizzes(id));
 

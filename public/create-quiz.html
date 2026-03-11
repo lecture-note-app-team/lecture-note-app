@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>クイズ作成 | 講義ノートメーカー</title>
+  <link rel="stylesheet" href="./style.css?v=6" />
+</head>
+<body>
+  <a href="/mypage.html">← マイページへ</a> / <a href="/my-quizzes.html">作成済みクイズ一覧</a>
+  <h1>クイズ作成</h1>
+
+  <div class="card">
+    <div id="message" class="small">読み込み中…</div>
+    <label>クイズタイトル（任意）</label>
+    <input id="title" maxlength="100" placeholder="未入力の場合は「無題のクイズ」" />
+
+    <label>紐づけノート（任意）</label>
+    <select id="noteId"><option value="">選択しない</option></select>
+
+    <label>クイズ形式</label>
+    <select id="quizType">
+      <option value="multiple_choice">4択問題</option>
+      <option value="written">記述問題</option>
+      <option value="true_false">○×問題</option>
+    </select>
+
+    <label>問題文</label>
+    <textarea id="questionText" maxlength="500"></textarea>
+
+    <div id="correctAnswerWrap">
+      <label>正解</label>
+      <input id="correctAnswer" maxlength="200" />
+    </div>
+
+    <div id="choicesWrap">
+      <label>選択肢1（正解候補）</label><input id="choice1" maxlength="100" />
+      <label>選択肢2</label><input id="choice2" maxlength="100" />
+      <label>選択肢3</label><input id="choice3" maxlength="100" />
+      <label>選択肢4</label><input id="choice4" maxlength="100" />
+      <div class="row" style="margin-top:8px;">
+        <button id="btnGenerateDistractors" type="button">不正解の選択肢をAI生成</button>
+      </div>
+    </div>
+
+    <label>解説（任意）</label>
+    <textarea id="explanation" maxlength="1000"></textarea>
+
+    <label>公開範囲</label>
+    <select id="visibility">
+      <option value="private">自分のみ</option>
+      <option value="community">コミュニティ内公開</option>
+    </select>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnSave" type="button">保存</button>
+    </div>
+  </div>
+
+  <script src="./create-quiz.js?v=1"></script>
+</body>
+</html>

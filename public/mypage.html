@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>マイページ | 講義ノートメーカー</title>
-  <link rel="stylesheet" href="./style.css?v=4" />
+  <link rel="stylesheet" href="./style.css?v=5" />
 </head>
 <body>
   <a href="/">← トップへ</a> / <a href="/login.html">ログインページ</a>
@@ -20,34 +20,61 @@
     <button id="btnDeleteAccount">アカウント削除（退会）</button>
   </div>
 
+  <div class="card" id="billingCard">
+    <div class="row" style="justify-content:space-between; align-items:flex-start;">
+      <div>
+        <h2 style="margin-bottom:6px;">プラン・課金情報</h2>
+        <div class="small">無料/有料の状態と、今月の利用状況を確認できます。</div>
+      </div>
+      <button id="btnReloadBilling">更新</button>
+    </div>
+    <div id="billingMessage" class="small" style="margin-top:8px;">読み込み中…</div>
+
+    <div class="billing-grid" style="margin-top:12px;">
+      <div class="billing-item"><span>現在プラン</span><b id="billingPlan">-</b></div>
+      <div class="billing-item"><span>契約状態</span><b id="billingStatus">-</b></div>
+      <div class="billing-item"><span>AI要約（月）</span><b id="billingAiUsage">-</b></div>
+      <div class="billing-item"><span>クイズ生成（月）</span><b id="billingQuizUsage">-</b></div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div class="small" style="margin-bottom:4px;">利用可能機能</div>
+      <ul id="billingFeatures" class="list" style="margin:0; padding-left:18px;"></ul>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnSubscribePro" class="btn-pro">Proプランに登録</button>
+      <button id="btnOpenPortal">請求管理を開く</button>
+      <button id="btnCancelSubscription" class="btn-cancel">解約する</button>
+    </div>
+  </div>
+
   <div class="card">
     <h2>自分のノート</h2>
     <div id="myList"></div>
   </div>
-  
+
   <div class="card">
     <h2>コミュニティ内ノート</h2>
     <div id="communityList">読み込み中…</div>
   </div>
 
   <div class="card" style="margin-top:12px;">
-  <div class="row2" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-    <h2 style="margin:0;">参加中コミュニティ</h2>
-    <button id="btnReloadCommunities">更新</button>
-  </div>
-  <div class="small" style="margin-top:6px;">
-    ※ 管理者だけ「削除（解散）」ができます。
+    <div class="row2" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <h2 style="margin:0;">参加中コミュニティ</h2>
+      <button id="btnReloadCommunities">更新</button>
+    </div>
+    <div class="small" style="margin-top:6px;">
+      ※ 管理者だけ「削除（解散）」ができます。
     </div>
     <ul id="communitiesList" class="list" style="margin:8px 0 0; padding-left:18px;"></ul>
   </div>
 
-<div class="card" style="margin-top:12px;">
-  <h2 style="margin:0 0 10px;">参加申請の承認</h2>
-  <div id="joinRequestApprovals"></div>
-</div>
+  <div class="card" style="margin-top:12px;">
+    <h2 style="margin:0 0 10px;">参加申請の承認</h2>
+    <div id="joinRequestApprovals"></div>
+  </div>
 
-
-  <script src="./mypage.js?v=1"></script>
-  
+  <script src="./mypage.js?v=2"></script>
 </body>
 </html>

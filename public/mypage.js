@@ -1,12 +1,26 @@
+class ApiError extends Error {
+  constructor(message, status = 0, data = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
+
   const text = await res.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch {}
-  if (!res.ok) throw new Error(data.detail || data.message || text || "API error");
+
+  if (!res.ok) {
+    const message = data.detail || data.message || text || "API error";
+    throw new ApiError(message, res.status, data);
+  }
   return data;
 }
 
@@ -32,6 +46,29 @@ function nextVisibility(v) {
 
 function toggleButtonText(v) {
   return v === "private" ? "公開にする" : "非公開にする";
+}
+
+function setButtonLoading(btn, loading, loadingText = "処理中…") {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.originalText = btn.textContent;
+    btn.textContent = loadingText;
+    btn.disabled = true;
+  } else {
+    btn.textContent = btn.dataset.originalText || btn.textContent;
+    btn.disabled = false;
+  }
+}
+
+function formatErrorMessage(err) {
+  if (!(err instanceof ApiError)) return `エラー: ${err.message || "不明なエラー"}`;
+
+  if (err.status === 401) return "ログインが必要です。ログイン後にお試しください。";
+  if (err.status === 402) return "有料プラン契約が必要です。Proプランに登録してください。";
+  if (err.status === 403) return "Pro限定または権限不足のため実行できません。";
+  if (err.status === 429) return "今月の利用上限に達しました。来月まで待つかプランをご確認ください。";
+
+  return err.message || "API呼び出しに失敗しました";
 }
 
 async function loadMe() {
@@ -111,6 +148,67 @@ async function deleteAccount(username) {
   }
 }
 
+function updateActionMessage(targetEl, type, message, html = false) {
+  if (!targetEl) return;
+  targetEl.className = `note-action-message ${type}`;
+  if (html) targetEl.innerHTML = message;
+  else targetEl.textContent = message;
+}
+
+async function handleGenerateQuiz(noteId, messageEl, triggerBtn) {
+  setButtonLoading(triggerBtn, true, "生成中…");
+  updateActionMessage(messageEl, "info", "クイズを生成しています…");
+
+  try {
+    const result = await api(`/api/notes/${noteId}/generate-quiz`, { method: "POST" });
+    let message = `クイズを ${Number(result.generatedCount || 0)} 件生成しました。`;
+
+    try {
+      const quizzes = await api(`/api/notes/${noteId}/quizzes`);
+      if (Array.isArray(quizzes)) message += `（合計 ${quizzes.length} 件）`;
+    } catch {}
+
+    updateActionMessage(messageEl, "success", message);
+    await loadBillingInfo();
+  } catch (err) {
+    updateActionMessage(messageEl, "error", formatErrorMessage(err));
+  } finally {
+    setButtonLoading(triggerBtn, false);
+  }
+}
+
+async function handleAiSummary(noteId, messageEl, triggerBtn) {
+  setButtonLoading(triggerBtn, true, "要約中…");
+  updateActionMessage(messageEl, "info", "AI要約を作成しています…");
+
+  try {
+    const result = await api(`/api/notes/${noteId}/ai-summary`, { method: "POST" });
+    const summary = escapeHtml(result.summary || "（要約結果なし）");
+    updateActionMessage(messageEl, "success", `<div><b>要約結果</b></div><div style="margin-top:4px;">${summary}</div>`, true);
+    await loadBillingInfo();
+  } catch (err) {
+    updateActionMessage(messageEl, "error", formatErrorMessage(err));
+  } finally {
+    setButtonLoading(triggerBtn, false);
+  }
+}
+
+async function handleExportPdf(noteId, messageEl, triggerBtn) {
+  setButtonLoading(triggerBtn, true, "出力中…");
+  updateActionMessage(messageEl, "info", "PDFを出力しています…");
+
+  try {
+    const result = await api(`/api/notes/${noteId}/export-pdf`, { method: "POST" });
+    const msg = escapeHtml(result.message || "PDF出力リクエストが完了しました");
+    const url = result.downloadUrl ? `<a href="${escapeHtml(result.downloadUrl)}" target="_blank" rel="noopener">ダウンロードリンク</a>` : "";
+    updateActionMessage(messageEl, "success", `<div>${msg}</div>${url ? `<div style="margin-top:4px;">${url}</div>` : ""}`, true);
+  } catch (err) {
+    updateActionMessage(messageEl, "error", formatErrorMessage(err));
+  } finally {
+    setButtonLoading(triggerBtn, false);
+  }
+}
+
 async function loadMyNotes() {
   const listEl = $("myList");
   listEl.innerHTML = "読み込み中…";
@@ -131,8 +229,6 @@ async function loadMyNotes() {
 
       const tag = visibilityLabel(n.visibility);
       const author = n.author_name ? ` / 投稿名：${escapeHtml(n.author_name)}` : "";
-
-      // community_id があるノートは「コミュ限定」っぽい表示にする（任意）
       const comm = n.community_id ? ` <span style="font-size:12px; color:#666;">🏠コミュID:${n.community_id}</span>` : "";
 
       div.innerHTML = `
@@ -142,15 +238,24 @@ async function loadMyNotes() {
           ${comm}
         </div>
         <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
+        <div class="small" style="margin-top:6px;">追加機能: クイズ生成（無料枠あり） / AI要約（無料枠あり） / PDF出力（Pro）</div>
         <div class="row" style="margin-top:8px;">
           <button class="btnOpen">開く</button>
           <button class="btnToggle">${toggleButtonText(n.visibility)}</button>
           <button class="btnDelete">削除</button>
+          <button class="btnGenerateQuiz">クイズ生成</button>
+          <button class="btnAiSummary">AI要約</button>
+          <button class="btnExportPdf">PDF出力</button>
         </div>
+        <div class="note-action-message" style="margin-top:8px;"></div>
       `;
 
+      const msgEl = div.querySelector(".note-action-message");
+      const btnGenerate = div.querySelector(".btnGenerateQuiz");
+      const btnSummary = div.querySelector(".btnAiSummary");
+      const btnPdf = div.querySelector(".btnExportPdf");
+
       div.querySelector(".btnOpen").addEventListener("click", () => {
-        // ★ここが修正点：note_detail.html に飛ばす
         location.href = "/note_detail.html?id=" + n.id;
       });
 
@@ -162,10 +267,121 @@ async function loadMyNotes() {
         deleteNote(n.id, n.title);
       });
 
+      btnGenerate.addEventListener("click", () => handleGenerateQuiz(n.id, msgEl, btnGenerate));
+      btnSummary.addEventListener("click", () => handleAiSummary(n.id, msgEl, btnSummary));
+      btnPdf.addEventListener("click", () => handleExportPdf(n.id, msgEl, btnPdf));
+
       listEl.appendChild(div);
     }
   } catch (e) {
     listEl.innerHTML = `取得失敗: ${escapeHtml(e.message)}<br><a href="/login.html">ログイン</a>`;
+  }
+}
+
+function planLabel(planCode) {
+  return planCode === "pro" ? "Pro" : "Free";
+}
+
+function subscriptionLabel(subscription, isActiveSubscription, planCode) {
+  if (!subscription) return planCode === "pro" ? "契約情報確認中" : "未契約";
+  if (subscription.cancel_at_period_end) return "解約予定（期間終了まで利用可）";
+  if (isActiveSubscription) return "有効";
+  return subscription.subscription_status || "無効";
+}
+
+function renderFeatureList(features = {}) {
+  const el = $("billingFeatures");
+  if (!el) return;
+
+  const rows = [
+    `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
+    `AI要約: 月 ${Number(features.ai_summary_monthly_limit || 0)} 回`,
+    `クイズ生成: 月 ${Number(features.quiz_generation_monthly_limit || 0)} 回`,
+    `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
+  ];
+
+  el.innerHTML = rows.map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+}
+
+function renderBilling(data) {
+  const planCode = data?.planCode || "free";
+  const features = data?.features || {};
+  const usage = data?.usage || {};
+  const isPro = planCode === "pro";
+
+  $("billingPlan").textContent = planLabel(planCode);
+  $("billingStatus").textContent = subscriptionLabel(data?.subscription, data?.isActiveSubscription, planCode);
+  $("billingAiUsage").textContent = `${Number(usage.ai_summary || 0)} / ${features.ai_summary_monthly_limit ?? "-"}`;
+  $("billingQuizUsage").textContent = `${Number(usage.quiz_generation || 0)} / ${features.quiz_generation_monthly_limit ?? "-"}`;
+
+  const msg = $("billingMessage");
+  msg.className = `small ${isPro ? "billing-ok" : "billing-free"}`;
+  msg.textContent = isPro
+    ? "現在Proプランです。Pro限定機能（PDF出力など）を利用できます。"
+    : "現在Freeプランです。PDF出力などはPro登録後に利用できます。";
+
+  renderFeatureList(features);
+
+  const btnSubscribe = $("btnSubscribePro");
+  const btnCancel = $("btnCancelSubscription");
+  if (btnSubscribe) {
+    btnSubscribe.disabled = isPro;
+    btnSubscribe.textContent = isPro ? "契約中（Pro）" : "Proプランに登録";
+    btnSubscribe.classList.toggle("btn-pro-active", !isPro);
+  }
+  if (btnCancel) {
+    const canCancel = isPro && data?.isActiveSubscription;
+    btnCancel.disabled = !canCancel;
+    btnCancel.title = canCancel ? "解約を予約します" : "有効なPro契約時に利用できます";
+  }
+}
+
+async function loadBillingInfo() {
+  const msg = $("billingMessage");
+  if (msg) {
+    msg.className = "small";
+    msg.textContent = "課金情報を読み込み中…";
+  }
+
+  try {
+    const data = await api("/api/billing/me");
+    renderBilling(data);
+  } catch (err) {
+    if ([401, 403].includes(err.status)) {
+      msg.textContent = "課金情報の表示にはログインが必要です。";
+      return;
+    }
+
+    msg.className = "small note-action-message error";
+    msg.textContent = `課金情報の取得に失敗しました: ${formatErrorMessage(err)}`;
+  }
+}
+
+async function redirectToReturnedUrl(path, button, loadingText) {
+  setButtonLoading(button, true, loadingText);
+  try {
+    const data = await api(path, { method: "POST" });
+    if (!data.url) throw new Error("遷移先URLが取得できませんでした");
+    location.href = data.url;
+  } catch (err) {
+    alert(formatErrorMessage(err));
+    setButtonLoading(button, false);
+  }
+}
+
+async function handleCancelSubscription(button) {
+  const ok = confirm("本当に解約しますか？\n期間終了まではPro機能を使えます。");
+  if (!ok) return;
+
+  setButtonLoading(button, true, "解約処理中…");
+  try {
+    await api("/api/billing/cancel", { method: "POST" });
+    alert("解約を受け付けました。期間終了時に停止されます。");
+    await loadBillingInfo();
+  } catch (err) {
+    alert(formatErrorMessage(err));
+  } finally {
+    setButtonLoading(button, false);
   }
 }
 
@@ -204,7 +420,6 @@ async function loadCommunityNotes() {
       `;
 
       div.querySelector(".btnOpen").addEventListener("click", () => {
-        // note_detail.html を使ってるならこっちに
         location.href = "/note_detail.html?id=" + n.id + "&from=" + encodeURIComponent("/mypage.html");
       });
 
@@ -215,89 +430,67 @@ async function loadCommunityNotes() {
   }
 }
 
-(async () => {
-  const me = await loadMe();
-  if (!me) return;
-
-  $("btnLogout")?.addEventListener("click", logout);
-  $("btnDeleteAccount")?.addEventListener("click", () => deleteAccount(me.username));
-
-  await loadMyNotes();
-  await loadCommunityNotes(); // ★追加
-})();
-
-
-async function loadCommunitiesOnMyPage(){
+async function loadCommunitiesOnMyPage() {
   const ul = $("communitiesList");
-  if (!ul) return; // UIを置いてないなら何もしない
+  if (!ul) return;
 
   ul.innerHTML = "<li>読み込み中…</li>";
 
-  try{
+  try {
     const me = await api("/api/me");
-    if (!me.loggedIn){
+    if (!me.loggedIn) {
       ul.innerHTML = "<li>ログインしてください。</li>";
       return;
     }
 
     const list = await api("/api/communities/mine");
 
-    if (!list || list.length === 0){
+    if (!list || list.length === 0) {
       ul.innerHTML = "<li>（参加中コミュニティはありません）</li>";
       return;
     }
 
     ul.innerHTML = "";
-    for (const c of list){
+    for (const c of list) {
       const li = document.createElement("li");
+      const isAdmin = c.role === "admin";
+      const roleLabel = isAdmin ? "管理者" : "メンバー";
 
-    const isAdmin = c.role === "admin";
-    const roleLabel = isAdmin ? "管理者" : "メンバー";
-
-    li.innerHTML = `
-      ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")}
-      <span style="margin-left:6px; font-size:12px; color:#666;">
-        👥 ${Number(c.member_count || 0)}人
-      </span>
-      <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px;">
-        ${roleLabel}
-      </span>
-      ${isAdmin
-        ? `<button data-delete-comm="${c.id}" style="margin-left:8px;">削除（解散）</button>`
-        : `<button data-leave-comm="${c.id}" style="margin-left:8px;">退会</button>`}
-    `;
+      li.innerHTML = `
+        ID: <b>${c.id}</b> / ${escapeHtml(c.name || "")}
+        <span style="margin-left:6px; font-size:12px; color:#666;">👥 ${Number(c.member_count || 0)}人</span>
+        <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; font-size:12px; margin-left:6px;">${roleLabel}</span>
+        ${isAdmin
+          ? `<button data-delete-comm="${c.id}" style="margin-left:8px;">削除（解散）</button>`
+          : `<button data-leave-comm="${c.id}" style="margin-left:8px;">退会</button>`}
+      `;
 
       ul.appendChild(li);
     }
 
-    // 削除ボタンのイベント（まとめて）
-    ul.querySelectorAll('button[data-delete-comm]').forEach(btn => {
+    ul.querySelectorAll('button[data-delete-comm]').forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = Number(btn.getAttribute("data-delete-comm"));
         if (!id) return;
 
         const ok = confirm(
-          `コミュニティ(ID:${id})を削除します。\n` +
-          `※コミュ内ノートも全削除されます（元に戻せません）。\n\n本当に削除しますか？`
+          `コミュニティ(ID:${id})を削除します。\n※コミュ内ノートも全削除されます（元に戻せません）。\n\n本当に削除しますか？`
         );
         if (!ok) return;
 
-        try{
-          btn.disabled = true;
-          btn.textContent = "削除中…";
+        try {
+          setButtonLoading(btn, true, "削除中…");
           await api(`/api/communities/${id}`, { method: "DELETE" });
           alert("削除しました");
           await loadCommunitiesOnMyPage();
-        } catch (e){
+        } catch (e) {
           alert("削除失敗: " + e.message);
-          btn.disabled = false;
-          btn.textContent = "削除（解散）";
+          setButtonLoading(btn, false);
         }
       });
     });
 
-    // 退会ボタンのイベント
-    ul.querySelectorAll('button[data-leave-comm]').forEach(btn => {
+    ul.querySelectorAll('button[data-leave-comm]').forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = Number(btn.getAttribute("data-leave-comm"));
         if (!id) return;
@@ -306,33 +499,20 @@ async function loadCommunitiesOnMyPage(){
         if (!ok) return;
 
         try {
-          btn.disabled = true;
-          btn.textContent = "退会中…";
+          setButtonLoading(btn, true, "退会中…");
           await api(`/api/communities/${id}/leave`, { method: "POST" });
           alert("退会しました");
           await loadCommunitiesOnMyPage();
         } catch (e) {
           alert("退会失敗: " + e.message);
-          btn.disabled = false;
-          btn.textContent = "退会";
+          setButtonLoading(btn, false);
         }
       });
     });
-
-  } catch(e){
+  } catch (e) {
     ul.innerHTML = `<li>取得失敗: ${escapeHtml(e.message)}</li>`;
   }
 }
-
-// 更新ボタン
-if ($("btnReloadCommunities")){
-  $("btnReloadCommunities").addEventListener("click", loadCommunitiesOnMyPage);
-}
-
-// ページ表示時に読み込み（DOMができてから）
-document.addEventListener("DOMContentLoaded", () => {
-  loadCommunitiesOnMyPage();
-});
 
 async function loadJoinRequestApprovals() {
   const box = document.getElementById("joinRequestApprovals");
@@ -341,7 +521,6 @@ async function loadJoinRequestApprovals() {
   box.innerHTML = `<div class="muted">読み込み中...</div>`;
 
   try {
-    // 既存：自分の参加コミュ一覧（あなたのserver.jsにある）
     const myComms = await api("/api/communities/mine");
 
     if (!Array.isArray(myComms) || myComms.length === 0) {
@@ -349,16 +528,13 @@ async function loadJoinRequestApprovals() {
       return;
     }
 
-    // 参加コミュごとのpending申請を取得
     const groups = [];
     for (const c of myComms) {
       try {
         const data = await api(`/api/communities/${c.id}/join-requests`);
         const reqs = data.requests || [];
         if (reqs.length) groups.push({ community: c, requests: reqs });
-      } catch {
-        // member/adminじゃないコミュはここで弾かれる（表示しない）
-      }
+      } catch {}
     }
 
     if (!groups.length) {
@@ -366,10 +542,10 @@ async function loadJoinRequestApprovals() {
       return;
     }
 
-    box.innerHTML = groups.map(g => `
+    box.innerHTML = groups.map((g) => `
       <div class="card" style="margin-top:10px;">
         <div class="title" style="margin-bottom:8px;">${escapeHtml(g.community.name)}</div>
-        ${g.requests.map(r => `
+        ${g.requests.map((r) => `
           <div class="item" style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
             <div>
               <div><b>${escapeHtml(r.username)}</b></div>
@@ -383,13 +559,11 @@ async function loadJoinRequestApprovals() {
         `).join("")}
       </div>
     `).join("");
-
   } catch (e) {
     box.innerHTML = `<div class="error">${escapeHtml(e.message || "読み込みに失敗")}</div>`;
   }
 }
 
-// 承認/却下（イベント委譲）
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-decide][data-reqid]");
   if (!btn) return;
@@ -403,101 +577,39 @@ document.addEventListener("click", async (e) => {
       method: "POST",
       body: JSON.stringify({ action }),
     });
-    await loadJoinRequestApprovals(); // 再描画
+    await loadJoinRequestApprovals();
   } catch (err) {
     alert(err.message || "操作に失敗しました");
     btn.disabled = false;
   }
 });
 
-// mypage.html を開いたら読み込む
-document.addEventListener("DOMContentLoaded", () => {
-  loadJoinRequestApprovals();
-});
+async function initMyPage() {
+  const me = await loadMe();
+  if (!me) return;
 
-// ===== コミュニティ検索（参加申請つき）=====
+  $("btnLogout")?.addEventListener("click", logout);
+  $("btnDeleteAccount")?.addEventListener("click", () => deleteAccount(me.username));
 
-async function searchCommunities() {
-  const qEl = document.getElementById("communitySearchQ");
-  const box = document.getElementById("communitySearchResult");
-  if (!qEl || !box) return; // mypage以外で動いても落ちない
+  $("btnReloadCommunities")?.addEventListener("click", loadCommunitiesOnMyPage);
+  $("btnReloadBilling")?.addEventListener("click", loadBillingInfo);
+  $("btnSubscribePro")?.addEventListener("click", (e) => {
+    redirectToReturnedUrl("/api/billing/create-checkout-session", e.currentTarget, "遷移中…");
+  });
+  $("btnOpenPortal")?.addEventListener("click", (e) => {
+    redirectToReturnedUrl("/api/billing/portal", e.currentTarget, "遷移中…");
+  });
+  $("btnCancelSubscription")?.addEventListener("click", (e) => {
+    handleCancelSubscription(e.currentTarget);
+  });
 
-  const q = qEl.value.trim();
-  if (!q) {
-    box.innerHTML = `<div class="muted">検索ワードを入力してね</div>`;
-    return;
-  }
-
-  box.innerHTML = `<div class="muted">検索中...</div>`;
-
-  try {
-    const data = await api(`/api/communities?q=${encodeURIComponent(q)}`);
-    const list = data.communities || [];
-    const loggedIn = !!data.loggedIn;
-
-    if (!list.length) {
-      box.innerHTML = `<div class="muted">見つかりませんでした</div>`;
-      return;
-    }
-
-    box.innerHTML = list.map(c => {
-      const member = Number(c.is_member || 0) === 1;
-      const pending = Number(c.has_pending || 0) === 1;
-
-      let right = "";
-      if (member) right = `<span class="muted">参加済み</span>`;
-      else if (pending) right = `<span class="muted">申請済み</span>`;
-      else if (!loggedIn) right = `<span class="muted">参加申請はログイン後に利用できます</span>`;
-      else right = `<button data-req="${c.id}">参加申請</button>`;
-
-      return `
-        <div class="item" style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
-          <div class="title">${escapeHtml(c.name)}</div>
-          <div>${right}</div>
-        </div>
-      `;
-    }).join("");
-
-    // 申請ボタン
-    box.querySelectorAll("button[data-req]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const communityId = Number(btn.dataset.req);
-        const message = prompt("参加申請メッセージ（任意）") || "";
-        btn.disabled = true;
-
-        try {
-          await api(`/api/communities/${communityId}/join-requests`, {
-            method: "POST",
-            body: JSON.stringify({ message }),
-          });
-          btn.outerHTML = `<span class="muted">申請済み</span>`;
-        } catch (e) {
-          alert(e.message || "申請に失敗しました");
-          btn.disabled = false;
-        }
-      });
-    });
-
-  } catch (e) {
-    box.innerHTML = `<div class="error">${escapeHtml(e.message || "検索に失敗")}</div>`;
-  }
+  await Promise.all([
+    loadBillingInfo(),
+    loadMyNotes(),
+    loadCommunityNotes(),
+    loadCommunitiesOnMyPage(),
+    loadJoinRequestApprovals(),
+  ]);
 }
 
-// イベント紐付け（検索ボタン/Enter）
-document.addEventListener("DOMContentLoaded", () => {
-  const btn = document.getElementById("communitySearchBtn");
-  const qEl = document.getElementById("communitySearchQ");
-  if (btn) btn.addEventListener("click", searchCommunities);
-  if (qEl) qEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") searchCommunities();
-  });
-});
-
-document.addEventListener("DOMContentLoaded", () => {
-  loadCommunitiesOnMyPage();
-  loadJoinRequestApprovals();
-
-  // 更新ボタン
-  document.getElementById("btnReloadCommunities")
-    ?.addEventListener("click", loadCommunitiesOnMyPage);
-});
+document.addEventListener("DOMContentLoaded", initMyPage);

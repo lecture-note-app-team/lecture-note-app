@@ -1681,6 +1681,7 @@ async function upsertSubscriptionFromStripe(subscription, customerId) {
     ) VALUES (?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?)
     ON DUPLICATE KEY UPDATE
       stripe_customer_id = VALUES(stripe_customer_id),
+      stripe_subscription_id = VALUES(stripe_subscription_id),
       plan_code = VALUES(plan_code),
       subscription_status = VALUES(subscription_status),
       current_period_end = VALUES(current_period_end),

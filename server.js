@@ -278,6 +278,71 @@ function canEditNote(req, note) {
   return { ok: true };
 }
 
+function validateUserQuizPayload(payload = {}) {
+  const titleRaw = String(payload.title || "").trim();
+  const questionText = String(payload.question_text || payload.questionText || "").trim();
+  const quizType = String(payload.quiz_type || payload.quizType || "").trim();
+  const correctAnswer = String(payload.correct_answer || payload.correctAnswer || "").trim();
+  const explanation = payload.explanation == null ? null : String(payload.explanation).trim();
+  const visibility = String(payload.visibility || "private").trim() === "community" ? "community" : "private";
+  const noteId = payload.note_id == null || payload.note_id === "" ? null : Number(payload.note_id);
+
+  const normalized = {
+    title: titleRaw || "無題のクイズ",
+    note_id: Number.isFinite(noteId) && noteId > 0 ? noteId : null,
+    question_text: questionText,
+    quiz_type: quizType,
+    correct_answer: correctAnswer,
+    explanation,
+    visibility,
+    choice_1: payload.choice_1 == null ? null : String(payload.choice_1).trim(),
+    choice_2: payload.choice_2 == null ? null : String(payload.choice_2).trim(),
+    choice_3: payload.choice_3 == null ? null : String(payload.choice_3).trim(),
+    choice_4: payload.choice_4 == null ? null : String(payload.choice_4).trim(),
+  };
+
+  const errors = [];
+  if (!normalized.question_text) errors.push("問題文は必須です");
+  if (!normalized.quiz_type) errors.push("クイズ形式は必須です");
+  if (!normalized.correct_answer) errors.push("正解は必須です");
+
+  if (normalized.title.length > 100) errors.push("タイトルは100文字以内で入力してください");
+  if (normalized.question_text.length > 500) errors.push("問題文は500文字以内で入力してください");
+  if (normalized.correct_answer.length > 200) errors.push("正解は200文字以内で入力してください");
+  if (normalized.explanation && normalized.explanation.length > 1000) {
+    errors.push("解説は1000文字以内で入力してください");
+  }
+
+  if (!["multiple_choice", "written", "true_false"].includes(normalized.quiz_type)) {
+    errors.push("quiz_type は multiple_choice / written / true_false のいずれかを指定してください");
+  }
+
+  if (normalized.quiz_type === "multiple_choice") {
+    const choices = [normalized.choice_1, normalized.choice_2, normalized.choice_3, normalized.choice_4].map((c) => String(c || "").trim());
+    if (choices.some((c) => !c)) errors.push("4択問題では選択肢4件が必要です");
+    if (choices.some((c) => c.length > 100)) errors.push("選択肢は各100文字以内で入力してください");
+
+    const unique = new Set(choices);
+    if (unique.size !== choices.length) errors.push("選択肢同士の重複は禁止です");
+    if (!choices.includes(normalized.correct_answer)) {
+      errors.push("4択問題の正解は4つの選択肢のいずれかと一致している必要があります");
+    }
+  }
+
+  if (normalized.quiz_type === "true_false" && !["○", "×"].includes(normalized.correct_answer)) {
+    errors.push("○×問題の正解は「○」または「×」のみです");
+  }
+
+  if (normalized.quiz_type !== "multiple_choice") {
+    normalized.choice_1 = null;
+    normalized.choice_2 = null;
+    normalized.choice_3 = null;
+    normalized.choice_4 = null;
+  }
+
+  return { normalized, errors };
+}
+
 async function generateQuizzesWithAI({ title, course_name, body_raw }) {
   const openai = getOpenAIClient();
   const body = String(body_raw || "").slice(0, 8000);
@@ -858,6 +923,23 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
   res.json(rows);
 }));
 
+app.get("/api/notes/:id/user-quizzes", requireLogin, wrap(async (req, res) => {
+  const noteId = Number(req.params.id);
+  const note = await getNoteById(noteId);
+  const perm = canEditNote(req, note);
+  if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
+
+  const [rows] = await pool.query(
+    `SELECT id, title, question_text, quiz_type, correct_answer, created_at
+       FROM user_quizzes
+      WHERE note_id = ? AND user_id = ?
+      ORDER BY created_at DESC, id DESC`,
+    [noteId, req.session.userId]
+  );
+
+  res.json({ success: true, data: { quizzes: rows } });
+}));
+
 // ============================
 // 強化版 ルールクイズ生成
 // generateQuizzesFromBodyRaw(body_raw) を置き換え用
@@ -1405,7 +1487,7 @@ app.patch("/api/quizzes/:quizId", requireLogin, wrap(async (req, res) => {
 }));
 
 // クイズ削除（作者のみ）
-app.delete("/api/quizzes/:quizId", requireLogin, wrap(async (req, res) => {
+app.delete("/api/note-quizzes/:quizId", requireLogin, wrap(async (req, res) => {
   const quizId = Number(req.params.quizId);
 
   const [qrows] = await pool.query(
@@ -1587,6 +1669,8 @@ const PLAN_FEATURES = {
     max_notes: 30,
     ai_summary_monthly_limit: 20,
     quiz_generation_monthly_limit: 10,
+    quiz_creation_monthly_limit: 10,
+    quiz_distractor_generation_monthly_limit: 20,
     max_custom_quizzes: 30,
     can_export_pdf: false,
   },
@@ -1594,6 +1678,8 @@ const PLAN_FEATURES = {
     max_notes: -1,
     ai_summary_monthly_limit: 500,
     quiz_generation_monthly_limit: 300,
+    quiz_creation_monthly_limit: -1,
+    quiz_distractor_generation_monthly_limit: -1,
     max_custom_quizzes: 1000,
     can_export_pdf: true,
   },
@@ -1756,7 +1842,7 @@ async function attachBillingContext(req, res, next) {
   next();
 }
 
-function requireUsageLimit(featureCode, limitKey) {
+function requireUsageLimit(featureCode, limitKey, limitExceededMessage = "この機能の月間利用上限に達しました") {
   return wrap(async (req, res, next) => {
     if (!req.session?.userId) {
       return res.status(401).json({ message: "ログインしてください" });
@@ -1779,7 +1865,7 @@ function requireUsageLimit(featureCode, limitKey) {
     const used = await getUsageCount(req.session.userId, featureCode);
     if (used >= limit) {
       return res.status(429).json({
-        message: "この機能の月間利用上限に達しました",
+        message: limitExceededMessage,
         code: "USAGE_LIMIT_EXCEEDED",
         featureCode,
         used,
@@ -1925,6 +2011,8 @@ app.get("/api/billing/me", requireLogin, wrap(async (req, res) => {
   const usage = {
     ai_summary: await getUsageCount(req.session.userId, "ai_summary"),
     quiz_generation: await getUsageCount(req.session.userId, "quiz_generation"),
+    quiz_creation: await getUsageCount(req.session.userId, "quiz_creation"),
+    quiz_distractor_generation: await getUsageCount(req.session.userId, "quiz_distractor_generation"),
   };
 
   res.json({
@@ -2061,7 +2149,7 @@ app.post("/api/notes/:id/generate-quiz", ...handleGenerateQuiz);
 app.post("/api/notes/:id/quizzes/generate", ...handleGenerateQuiz);
 
 
-app.post("/api/quizzes", requireLogin, wrap(async (req, res) => {
+app.post("/api/note-quizzes", requireLogin, wrap(async (req, res) => {
   const noteId = Number(req.body.note_id);
   const question = String(req.body.question || "").trim();
   const answer = String(req.body.answer || "").trim();
@@ -2105,6 +2193,226 @@ const [result] = await pool.query(
     remaining: maxCustomQuizzes === -1 ? null : Math.max(maxCustomQuizzes - (currentCount + 1), 0),
   });
 }));
+
+app.post(
+  "/api/quizzes",
+  requireLogin,
+  requireUsageLimit("quiz_creation", "quiz_creation_monthly_limit", "無料プランではクイズ作成は月10回までです。有料プランで無制限になります。"),
+  wrap(async (req, res) => {
+    const userId = req.session.userId;
+    const { normalized, errors } = validateUserQuizPayload(req.body || {});
+    if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+    if (normalized.note_id) {
+      const note = await getNoteById(normalized.note_id);
+      const perm = canEditNote(req, note);
+      if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO user_quizzes (
+        user_id, note_id, title, question_text, quiz_type,
+        choice_1, choice_2, choice_3, choice_4,
+        correct_answer, explanation, visibility
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        normalized.note_id,
+        normalized.title,
+        normalized.question_text,
+        normalized.quiz_type,
+        normalized.choice_1,
+        normalized.choice_2,
+        normalized.choice_3,
+        normalized.choice_4,
+        normalized.correct_answer,
+        normalized.explanation,
+        normalized.visibility,
+      ]
+    );
+
+    await incrementUsageCount(userId, "quiz_creation", 1);
+
+    res.status(201).json({
+      ok: true,
+      id: result.insertId,
+      usage: {
+        featureCode: "quiz_creation",
+        usedAfter: (req.usageLimit?.used || 0) + 1,
+        limit: req.usageLimit?.limit,
+      },
+    });
+  })
+);
+
+app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
+  const userId = req.session.userId;
+  const noteId = req.query.note_id ? Number(req.query.note_id) : null;
+  const quizType = String(req.query.quiz_type || "").trim();
+
+  let sql = `
+    SELECT id, user_id, note_id, title, question_text, quiz_type,
+           choice_1, choice_2, choice_3, choice_4,
+           correct_answer, explanation, visibility, created_at, updated_at
+      FROM user_quizzes
+     WHERE user_id = ?`;
+  const params = [userId];
+
+  if (noteId) {
+    sql += " AND note_id = ?";
+    params.push(noteId);
+  }
+  if (["multiple_choice", "written", "true_false"].includes(quizType)) {
+    sql += " AND quiz_type = ?";
+    params.push(quizType);
+  }
+  sql += " ORDER BY created_at DESC, id DESC";
+
+  const [rows] = await pool.query(sql, params);
+  res.json({ success: true, data: { quizzes: rows } });
+}));
+
+app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const [rows] = await pool.query(
+    `SELECT id, user_id, note_id, title, question_text, quiz_type,
+            choice_1, choice_2, choice_3, choice_4,
+            correct_answer, explanation, visibility, created_at, updated_at
+       FROM user_quizzes
+      WHERE id = ?
+      LIMIT 1`,
+    [id]
+  );
+  if (!rows.length) return res.status(404).json({ message: "not found" });
+  if (rows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+
+  res.json({ success: true, data: rows[0] });
+}));
+
+app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const [existingRows] = await pool.query("SELECT user_id FROM user_quizzes WHERE id = ? LIMIT 1", [id]);
+  if (!existingRows.length) return res.status(404).json({ message: "not found" });
+  if (existingRows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+
+  const { normalized, errors } = validateUserQuizPayload(req.body || {});
+  if (errors.length) return res.status(400).json({ message: errors[0], errors });
+
+  if (normalized.note_id) {
+    const note = await getNoteById(normalized.note_id);
+    const perm = canEditNote(req, note);
+    if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
+  }
+
+  await pool.query(
+    `UPDATE user_quizzes
+        SET note_id = ?, title = ?, question_text = ?, quiz_type = ?,
+            choice_1 = ?, choice_2 = ?, choice_3 = ?, choice_4 = ?,
+            correct_answer = ?, explanation = ?, visibility = ?
+      WHERE id = ?`,
+    [
+      normalized.note_id,
+      normalized.title,
+      normalized.question_text,
+      normalized.quiz_type,
+      normalized.choice_1,
+      normalized.choice_2,
+      normalized.choice_3,
+      normalized.choice_4,
+      normalized.correct_answer,
+      normalized.explanation,
+      normalized.visibility,
+      id,
+    ]
+  );
+
+  res.json({ ok: true, id });
+}));
+
+app.delete("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+
+  const [rows] = await pool.query("SELECT user_id FROM user_quizzes WHERE id = ? LIMIT 1", [id]);
+  if (rows.length) {
+    if (rows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+    await pool.query("DELETE FROM user_quizzes WHERE id = ?", [id]);
+    return res.json({ ok: true, deleted: "user_quiz" });
+  }
+
+  const [qrows] = await pool.query(
+    `SELECT q.id, n.user_id AS note_user_id
+       FROM note_quizzes q
+       JOIN notes n ON n.id = q.note_id
+      WHERE q.id = ?`,
+    [id]
+  );
+  if (!qrows.length) return res.status(404).json({ message: "not found" });
+  if (qrows[0].note_user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+
+  await pool.query("DELETE FROM note_quizzes WHERE id = ?", [id]);
+  return res.json({ ok: true, deleted: "note_quiz" });
+}));
+
+app.post(
+  "/api/quizzes/generate-distractors",
+  requireLogin,
+  requireUsageLimit("quiz_distractor_generation", "quiz_distractor_generation_monthly_limit"),
+  wrap(async (req, res) => {
+    const questionText = String(req.body?.questionText || "").trim();
+    const correctAnswer = String(req.body?.correctAnswer || "").trim();
+    if (!questionText || !correctAnswer) {
+      return res.status(400).json({ message: "questionText と correctAnswer は必須です" });
+    }
+
+    const openai = getOpenAIClient();
+    const prompt = [
+      "入力された問題文と正解をもとに、4択問題の不正解選択肢を3つ作成してください。",
+      "条件:",
+      "- 正解と似たカテゴリ・難易度・粒度にする",
+      "- ただし正解そのものは含めない",
+      "- 3つとも重複しない",
+      "- 曖昧すぎる内容や『すべて正しい』のような不適切な選択肢は禁止",
+      "- 出力はJSONのみ。形式は {\"distractors\":[\"...\",\"...\",\"...\"] }",
+      `問題文: ${questionText}`,
+      `正解: ${correctAnswer}`,
+    ].join("\n");
+
+    let distractors = [];
+    try {
+      const response = await openai.responses.create({ model: process.env.OPENAI_QUIZ_MODEL || "gpt-4.1-mini", input: prompt });
+      const raw = response.output_text || "";
+      const parsed = JSON.parse(raw);
+      distractors = Array.isArray(parsed?.distractors) ? parsed.distractors : [];
+    } catch (error) {
+      console.error("generate_distractors_failed", error);
+      return res.status(502).json({ message: "AIによる不正解候補の生成に失敗しました" });
+    }
+
+    const unique = [];
+    const seen = new Set([correctAnswer]);
+    for (const d of distractors) {
+      const v = String(d || "").trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      unique.push(v);
+    }
+
+    if (unique.length < 3) {
+      return res.status(422).json({ message: "不正解候補を十分に生成できませんでした。もう一度お試しください。" });
+    }
+
+    await incrementUsageCount(req.session.userId, "quiz_distractor_generation", 1);
+    res.json({
+      success: true,
+      data: { distractors: unique.slice(0, 3) },
+      usage: {
+        featureCode: "quiz_distractor_generation",
+        usedAfter: (req.usageLimit?.used || 0) + 1,
+        limit: req.usageLimit?.limit,
+      },
+    });
+  })
+);
 
 // ---------- Error Handler ----------
 app.use((err, req, res, next) => {

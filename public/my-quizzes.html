@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>作成クイズ一覧 | 講義ノートメーカー</title>
+  <link rel="stylesheet" href="./style.css?v=6" />
+</head>
+<body>
+  <a href="/mypage.html">← マイページへ</a> / <a href="/create-quiz.html">クイズ新規作成</a>
+  <h1>作成クイズ一覧</h1>
+
+  <div class="card">
+    <div class="row">
+      <select id="filterType">
+        <option value="">全形式</option>
+        <option value="multiple_choice">4択</option>
+        <option value="written">記述</option>
+        <option value="true_false">○×</option>
+      </select>
+      <button id="btnReload" type="button">更新</button>
+    </div>
+    <div id="message" class="small" style="margin-top:8px;"></div>
+    <div id="quizList"></div>
+  </div>
+
+  <script src="./my-quizzes.js?v=1"></script>
+</body>
+</html>

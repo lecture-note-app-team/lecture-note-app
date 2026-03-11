@@ -297,6 +297,8 @@ function renderFeatureList(features = {}) {
     `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
     `AI要約: 月 ${Number(features.ai_summary_monthly_limit || 0)} 回`,
     `クイズ生成: 月 ${Number(features.quiz_generation_monthly_limit || 0)} 回`,
+    `クイズ手動作成: ${features.quiz_creation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_creation_monthly_limit || 0) + " 回"}`,
+    `不正解AI生成: ${features.quiz_distractor_generation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_distractor_generation_monthly_limit || 0) + " 回"}`,
     `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
   ];
 

@@ -41,6 +41,7 @@ const session = require("express-session");
 const MySQLStore = require("express-mysql-session")(session);
 const bcrypt = require("bcrypt");
 const OpenAI = require("openai");
+const { generateQuizzesWithQualityPipeline } = require("./services/quizGenerator");
 
 // ---------- OpenAI ----------
 function getOpenAIClient() {
@@ -344,6 +345,16 @@ ${body}
       answer: q.answer == null ? "" : String(q.answer).trim().slice(0, 500),
       source_line: q.source_line == null ? null : String(q.source_line).trim().slice(0, 200),
     }));
+}
+
+async function generateQuizzesForNote(note, options = {}) {
+  const openai = getOpenAIClient();
+  return generateQuizzesWithQualityPipeline({
+    openai,
+    note,
+    targetCount: options.limit || 10,
+    logger: console,
+  });
 }
 
 // 自分の参加コミュ一覧（コミュ名 + メンバー数つき）
@@ -1990,8 +2001,7 @@ app.post(
   })
 );
 
-app.post(
-  "/api/notes/:id/generate-quiz",
+const handleGenerateQuiz = [
   requireLogin,
   requireUsageLimit("quiz_generation", "quiz_generation_monthly_limit"),
   wrap(async (req, res) => {
@@ -2008,7 +2018,21 @@ app.post(
       return res.status(perm.status).json({ message: perm.message });
     }
 
-    const quizzes = generateQuizzesFromBodyRaw(note.body_raw, { limit: 10 });
+    let quizzes = [];
+    try {
+      quizzes = await generateQuizzesForNote(note, { limit: 10 });
+    } catch (err) {
+      console.error("quiz_pipeline_failed", {
+        noteId,
+        userId,
+        message: err.message,
+        details: err.details || null,
+      });
+      return res.status(422).json({
+        message: "クイズ生成品質が基準を満たしませんでした。ノート内容を見直して再実行してください。",
+        detail: err.message,
+      });
+    }
 
     for (const q of quizzes) {
       await pool.query(
@@ -2031,7 +2055,11 @@ app.post(
       },
     });
   })
-);
+];
+
+app.post("/api/notes/:id/generate-quiz", ...handleGenerateQuiz);
+app.post("/api/notes/:id/quizzes/generate", ...handleGenerateQuiz);
+
 
 app.post("/api/quizzes", requireLogin, wrap(async (req, res) => {
   const noteId = Number(req.body.note_id);

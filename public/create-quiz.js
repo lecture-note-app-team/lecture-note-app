@@ -71,6 +71,9 @@ async function saveQuiz() {
   btn.disabled = true;
   try {
     const payload = collectPayload();
+    if (!payload.note_id) {
+      throw new Error("ノートを選択してください");
+    }
     const editId = new URLSearchParams(location.search).get("edit_id");
     const result = await api(editId ? `/api/quizzes/${editId}` : "/api/quizzes", {
       method: editId ? "PUT" : "POST",
@@ -78,6 +81,7 @@ async function saveQuiz() {
     });
     setMessage(editId ? `更新しました（ID: ${result.id || editId}）` : `保存しました（ID: ${result.id}）`);
   } catch (e) {
+    console.error("saveQuiz failed", e);
     setMessage(e.message, true);
   } finally {
     btn.disabled = false;

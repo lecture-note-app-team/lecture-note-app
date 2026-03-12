@@ -303,6 +303,7 @@ function validateUserQuizPayload(payload = {}) {
 
   const errors = [];
   if (!normalized.question_text) errors.push("問題文は必須です");
+  if (!normalized.note_id) errors.push("note_id は必須です");
   if (!normalized.quiz_type) errors.push("クイズ形式は必須です");
   if (!normalized.correct_answer) errors.push("正解は必須です");
 
@@ -912,12 +913,17 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
   const perm = await canViewNote(req, note);
   if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
 
+  const userId = req.session?.userId || null;
   const [rows] = await pool.query(
     `SELECT id, type, question, answer, source_line, created_at, updated_at
        FROM note_quizzes
       WHERE note_id = ?
+        AND (
+          COALESCE(visibility, 'private') = 'community'
+          OR user_id = ?
+        )
       ORDER BY id ASC`,
-    [noteId]
+    [noteId, userId]
   );
 
   res.json(rows);
@@ -930,8 +936,13 @@ app.get("/api/notes/:id/user-quizzes", requireLogin, wrap(async (req, res) => {
   if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
 
   const [rows] = await pool.query(
-    `SELECT id, title, question_text, quiz_type, correct_answer, created_at
-       FROM user_quizzes
+    `SELECT id,
+            CONCAT('ノートクイズ #', id) AS title,
+            question AS question_text,
+            type AS quiz_type,
+            answer AS correct_answer,
+            created_at
+       FROM note_quizzes
       WHERE note_id = ? AND user_id = ?
       ORDER BY created_at DESC, id DESC`,
     [noteId, req.session.userId]
@@ -2209,27 +2220,22 @@ app.post(
       if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
     }
 
-    const [result] = await pool.query(
-      `INSERT INTO user_quizzes (
-        user_id, note_id, title, question_text, quiz_type,
-        choice_1, choice_2, choice_3, choice_4,
-        correct_answer, explanation, visibility
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
+    let result;
+    try {
+      [result] = await pool.query(
+        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, visibility)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [userId, normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility]
+      );
+    } catch (error) {
+      console.error("POST /api/quizzes failed", {
         userId,
-        normalized.note_id,
-        normalized.title,
-        normalized.question_text,
-        normalized.quiz_type,
-        normalized.choice_1,
-        normalized.choice_2,
-        normalized.choice_3,
-        normalized.choice_4,
-        normalized.correct_answer,
-        normalized.explanation,
-        normalized.visibility,
-      ]
-    );
+        note_id: normalized.note_id,
+        quiz_type: normalized.quiz_type,
+        error,
+      });
+      throw error;
+    }
 
     await incrementUsageCount(userId, "quiz_creation", 1);
 
@@ -2251,10 +2257,22 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
   const quizType = String(req.query.quiz_type || "").trim();
 
   let sql = `
-    SELECT id, user_id, note_id, title, question_text, quiz_type,
-           choice_1, choice_2, choice_3, choice_4,
-           correct_answer, explanation, visibility, created_at, updated_at
-      FROM user_quizzes
+    SELECT id,
+           user_id,
+           note_id,
+           CONCAT('ノートクイズ #', id) AS title,
+           question AS question_text,
+           type AS quiz_type,
+           NULL AS choice_1,
+           NULL AS choice_2,
+           NULL AS choice_3,
+           NULL AS choice_4,
+           answer AS correct_answer,
+           NULL AS explanation,
+           COALESCE(visibility, 'private') AS visibility,
+           created_at,
+           updated_at
+      FROM note_quizzes
      WHERE user_id = ?`;
   const params = [userId];
 
@@ -2262,8 +2280,8 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
     sql += " AND note_id = ?";
     params.push(noteId);
   }
-  if (["multiple_choice", "written", "true_false"].includes(quizType)) {
-    sql += " AND quiz_type = ?";
+  if (quizType) {
+    sql += " AND type = ?";
     params.push(quizType);
   }
   sql += " ORDER BY created_at DESC, id DESC";
@@ -2275,10 +2293,22 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
 app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   const id = Number(req.params.id);
   const [rows] = await pool.query(
-    `SELECT id, user_id, note_id, title, question_text, quiz_type,
-            choice_1, choice_2, choice_3, choice_4,
-            correct_answer, explanation, visibility, created_at, updated_at
-       FROM user_quizzes
+    `SELECT id,
+            user_id,
+            note_id,
+            CONCAT('ノートクイズ #', id) AS title,
+            question AS question_text,
+            type AS quiz_type,
+            NULL AS choice_1,
+            NULL AS choice_2,
+            NULL AS choice_3,
+            NULL AS choice_4,
+            answer AS correct_answer,
+            NULL AS explanation,
+            COALESCE(visibility, 'private') AS visibility,
+            created_at,
+            updated_at
+       FROM note_quizzes
       WHERE id = ?
       LIMIT 1`,
     [id]
@@ -2291,7 +2321,7 @@ app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
 
 app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const [existingRows] = await pool.query("SELECT user_id FROM user_quizzes WHERE id = ? LIMIT 1", [id]);
+  const [existingRows] = await pool.query("SELECT user_id FROM note_quizzes WHERE id = ? LIMIT 1", [id]);
   if (!existingRows.length) return res.status(404).json({ message: "not found" });
   if (existingRows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
 
@@ -2304,57 +2334,32 @@ app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
     if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
   }
 
-  await pool.query(
-    `UPDATE user_quizzes
-        SET note_id = ?, title = ?, question_text = ?, quiz_type = ?,
-            choice_1 = ?, choice_2 = ?, choice_3 = ?, choice_4 = ?,
-            correct_answer = ?, explanation = ?, visibility = ?
-      WHERE id = ?`,
-    [
-      normalized.note_id,
-      normalized.title,
-      normalized.question_text,
-      normalized.quiz_type,
-      normalized.choice_1,
-      normalized.choice_2,
-      normalized.choice_3,
-      normalized.choice_4,
-      normalized.correct_answer,
-      normalized.explanation,
-      normalized.visibility,
+  try {
+    await pool.query(
+      `UPDATE note_quizzes
+          SET note_id = ?, type = ?, question = ?, answer = ?, visibility = ?
+        WHERE id = ?`,
+      [normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility, id]
+    );
+  } catch (error) {
+    console.error("PUT /api/quizzes/:id failed", {
       id,
-    ]
-  );
+      userId: req.session.userId,
+      note_id: normalized.note_id,
+      quiz_type: normalized.quiz_type,
+      error,
+    });
+    throw error;
+  }
 
   res.json({ ok: true, id });
 }));
 
 app.delete("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   const id = Number(req.params.id);
-  let hasForeignUserQuiz = false;
-
-  const [rows] = await pool.query("SELECT user_id FROM user_quizzes WHERE id = ? LIMIT 1", [id]);
-  if (rows.length) {
-    if (rows[0].user_id === req.session.userId) {
-      await pool.query("DELETE FROM user_quizzes WHERE id = ?", [id]);
-      return res.json({ ok: true, deleted: "user_quiz" });
-    }
-
-    hasForeignUserQuiz = true;
-  }
-
-  const [qrows] = await pool.query(
-    `SELECT q.id, n.user_id AS note_user_id
-       FROM note_quizzes q
-       JOIN notes n ON n.id = q.note_id
-      WHERE q.id = ?`,
-    [id]
-  );
-  if (!qrows.length) {
-    if (hasForeignUserQuiz) return res.status(403).json({ message: "forbidden" });
-    return res.status(404).json({ message: "not found" });
-  }
-  if (qrows[0].note_user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+  const [rows] = await pool.query("SELECT user_id FROM note_quizzes WHERE id = ? LIMIT 1", [id]);
+  if (!rows.length) return res.status(404).json({ message: "not found" });
+  if (rows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
 
   await pool.query("DELETE FROM note_quizzes WHERE id = ?", [id]);
   return res.json({ ok: true, deleted: "note_quiz" });

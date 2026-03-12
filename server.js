@@ -302,6 +302,9 @@ function validateUserQuizPayload(payload = {}) {
   };
 
   const errors = [];
+  if (payload.note_id != null && payload.note_id !== "" && (!Number.isFinite(noteId) || noteId <= 0)) {
+    errors.push("note_id は正の整数で指定してください");
+  }
   if (!normalized.question_text) errors.push("問題文は必須です");
   if (!normalized.quiz_type) errors.push("クイズ形式は必須です");
   if (!normalized.correct_answer) errors.push("正解は必須です");
@@ -2205,8 +2208,12 @@ app.post(
 
     if (normalized.note_id) {
       const note = await getNoteById(normalized.note_id);
+      if (!note) return res.status(404).json({ message: "対象のノートが見つかりません" });
       const perm = canEditNote(req, note);
-      if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
+      if (!perm.ok) {
+        if (perm.status === 401) return res.status(401).json({ message: "ログインしてください" });
+        return res.status(403).json({ message: "指定したノートに紐づける権限がありません" });
+      }
     }
 
     const [result] = await pool.query(
@@ -2300,8 +2307,12 @@ app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
 
   if (normalized.note_id) {
     const note = await getNoteById(normalized.note_id);
+    if (!note) return res.status(404).json({ message: "対象のノートが見つかりません" });
     const perm = canEditNote(req, note);
-    if (!perm.ok) return res.status(perm.status).json({ message: "指定したノートに紐づける権限がありません" });
+    if (!perm.ok) {
+      if (perm.status === 401) return res.status(401).json({ message: "ログインしてください" });
+      return res.status(403).json({ message: "指定したノートに紐づける権限がありません" });
+    }
   }
 
   await pool.query(
@@ -2423,7 +2434,13 @@ app.post(
 
 // ---------- Error Handler ----------
 app.use((err, req, res, next) => {
-  console.error(err);
+  console.error("unhandled_error", {
+    method: req.method,
+    path: req.originalUrl || req.path,
+    message: err?.message,
+    stack: err?.stack,
+    code: err?.code,
+  });
 
   const isApi = String(req.path || "").startsWith("/api/");
   if (isApi) {

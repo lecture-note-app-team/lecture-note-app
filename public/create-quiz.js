@@ -1,5 +1,14 @@
 function $(id) { return document.getElementById(id); }
 
+class ApiError extends Error {
+  constructor(message, status, payload = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -8,7 +17,13 @@ async function api(path, options = {}) {
   const text = await res.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch {}
-  if (!res.ok) throw new Error(data.message || data.detail || text || "API error");
+  if (!res.ok) {
+    throw new ApiError(
+      data.message || data.detail || text || "API error",
+      res.status,
+      data,
+    );
+  }
   return data;
 }
 
@@ -36,12 +51,31 @@ function syncFormByType() {
 async function loadNotes() {
   const rows = await api("/api/my-notes");
   const select = $("noteId");
+  const knownIds = new Set();
   for (const n of rows) {
     const op = document.createElement("option");
     op.value = n.id;
     op.textContent = `${n.title} (${n.lecture_date || "日付未設定"})`;
     select.appendChild(op);
+    knownIds.add(String(n.id));
   }
+  return knownIds;
+}
+
+function getInitErrorMessage(error) {
+  if (!(error instanceof ApiError)) return "初期化に失敗しました。時間をおいて再読み込みしてください。";
+  if (error.status === 401) return "ログイン状態を確認してください。";
+  if (error.status === 403) return "このページを表示する権限がありません。";
+  return "初期表示に失敗しました。時間をおいて再読み込みしてください。";
+}
+
+function getSaveErrorMessage(error) {
+  if (!(error instanceof ApiError)) return "クイズの保存に失敗しました。時間をおいて再試行してください。";
+  if (error.status === 400) return error.message || "入力内容を確認してください。";
+  if (error.status === 401) return "ログイン状態を確認してください。";
+  if (error.status === 403) return "このノートにクイズを保存する権限がありません。";
+  if (error.status === 404) return "対象のノートが見つかりません。";
+  return "クイズの保存に失敗しました。時間をおいて再試行してください。";
 }
 
 function collectPayload() {
@@ -78,7 +112,8 @@ async function saveQuiz() {
     });
     setMessage(editId ? `更新しました（ID: ${result.id || editId}）` : `保存しました（ID: ${result.id}）`);
   } catch (e) {
-    setMessage(e.message, true);
+    setMessage(getSaveErrorMessage(e), true);
+    console.error("save_quiz_failed", e);
   } finally {
     btn.disabled = false;
   }
@@ -129,7 +164,12 @@ async function generateDistractors() {
     $("choice4").value = d3;
     setMessage("不正解の候補を入力しました。必要に応じて編集してください。");
   } catch (e) {
-    setMessage(e.message, true);
+    if (e instanceof ApiError && e.status === 401) {
+      setMessage("ログイン状態を確認してください。", true);
+    } else {
+      setMessage("不正解候補の生成に失敗しました。時間をおいて再試行してください。", true);
+    }
+    console.error("generate_distractors_failed", e);
   } finally {
     btn.disabled = false;
     btn.textContent = "不正解の選択肢をAI生成";
@@ -137,22 +177,36 @@ async function generateDistractors() {
 }
 
 (async () => {
+  let hasInitWarning = false;
   try {
     const params = new URLSearchParams(location.search);
     const noteId = params.get("note_id");
     const editId = params.get("edit_id");
 
     await api("/api/me");
-    await loadNotes();
-    if (noteId) $("noteId").value = noteId;
+    const noteIds = await loadNotes();
+    if (noteId) {
+      if (!/^\d+$/.test(noteId)) {
+        setMessage("対象ノートの指定が不正です。", true);
+        hasInitWarning = true;
+      } else if (noteIds.has(noteId)) {
+        $("noteId").value = noteId;
+      } else {
+        setMessage("対象のノートが見つかりません。ノート選択を確認してください。", true);
+        hasInitWarning = true;
+      }
+    }
     syncFormByType();
     if (editId) {
       await loadEditQuiz(editId);
       $("btnSave").textContent = "更新";
     }
-    setMessage("入力して保存してください。");
+    if (!hasInitWarning) {
+      setMessage("入力して保存してください。");
+    }
   } catch (e) {
-    setMessage(`初期化に失敗しました: ${e.message}`, true);
+    setMessage(getInitErrorMessage(e), true);
+    console.error("create_quiz_init_failed", e);
   }
 
   $("quizType").addEventListener("change", syncFormByType);

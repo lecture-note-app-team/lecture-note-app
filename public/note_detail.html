@@ -14,13 +14,26 @@
     .row2 { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .small { color:#555; font-size:14px; }
     .top-nav { margin:10px 0; }
-    .top-nav .button-link { min-height: 44px; padding: 10px 16px; }
+    .top-nav-link {
+      font-size: inherit;
+      color: rgba(59,130,246,0.95);
+      text-decoration: none;
+      padding: 0;
+      margin: 0;
+      border: none;
+      background: none;
+      box-shadow: none;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      min-height: auto;
+    }
+    .top-nav-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="row2 top-nav">
-    <a href="/" id="backLink">← 戻る</a>
-    <a href="/mypage.html" id="btnGoMyPage" class="button-link">マイページへ</a>
+    <a href="/" id="backLink" class="top-nav-link">← 戻る</a>
+    <a href="/mypage.html" id="btnGoMyPage" class="top-nav-link">マイページへ</a>
   </div>
 
   <h1 id="title"></h1>

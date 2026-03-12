@@ -283,6 +283,28 @@ function canEditNote(req, note) {
 }
 
 function validateUserQuizPayload(payload = {}) {
+  const parseChoiceArray = (raw) => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    try {
+      const parsed = JSON.parse(String(raw));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const normalizeChoiceValue = (...candidates) => {
+    for (const candidate of candidates) {
+      if (candidate == null) continue;
+      const value = String(candidate).trim();
+      if (value) return value;
+    }
+    return null;
+  };
+  const incomingChoices = parseChoiceArray(payload.choices).length
+    ? parseChoiceArray(payload.choices)
+    : parseChoiceArray(payload.options);
+
   const titleRaw = String(payload.title || "").trim();
   const questionText = String(payload.question_text || payload.questionText || "").trim();
   const quizType = String(payload.quiz_type || payload.quizType || "").trim();
@@ -299,10 +321,10 @@ function validateUserQuizPayload(payload = {}) {
     correct_answer: correctAnswer,
     explanation,
     visibility,
-    choice_1: payload.choice_1 == null ? null : String(payload.choice_1).trim(),
-    choice_2: payload.choice_2 == null ? null : String(payload.choice_2).trim(),
-    choice_3: payload.choice_3 == null ? null : String(payload.choice_3).trim(),
-    choice_4: payload.choice_4 == null ? null : String(payload.choice_4).trim(),
+    choice_1: normalizeChoiceValue(payload.choice_1, payload.option_1, incomingChoices[0]),
+    choice_2: normalizeChoiceValue(payload.choice_2, payload.option_2, incomingChoices[1]),
+    choice_3: normalizeChoiceValue(payload.choice_3, payload.option_3, incomingChoices[2]),
+    choice_4: normalizeChoiceValue(payload.choice_4, payload.option_4, incomingChoices[3]),
   };
 
   const errors = [];
@@ -396,7 +418,7 @@ function extractChoicesFromQuestionText(questionText) {
 }
 
 function normalizeQuizChoices(row = {}) {
-  const directChoices = [row.choice_1, row.choice_2, row.choice_3, row.choice_4]
+  const directChoices = [row.choice_1, row.choice_2, row.choice_3, row.choice_4, row.option_1, row.option_2, row.option_3, row.option_4]
     .map((v) => String(v || "").trim())
     .filter(Boolean);
   if (directChoices.length) {
@@ -406,6 +428,8 @@ function normalizeQuizChoices(row = {}) {
       choice_2: directChoices[1] || null,
       choice_3: directChoices[2] || null,
       choice_4: directChoices[3] || null,
+      options: JSON.stringify(directChoices),
+      choices: JSON.stringify(directChoices),
     };
   }
 
@@ -420,6 +444,8 @@ function normalizeQuizChoices(row = {}) {
     choice_2: fallbackChoices[1] || null,
     choice_3: fallbackChoices[2] || null,
     choice_4: fallbackChoices[3] || null,
+    options: fallbackChoices.length ? JSON.stringify(fallbackChoices) : row.options,
+    choices: fallbackChoices.length ? JSON.stringify(fallbackChoices) : row.choices,
   };
 }
 
@@ -1130,8 +1156,21 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
   if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
 
   const userId = req.session?.userId || null;
+  const choiceSelect = await buildNoteQuizSelectChoiceFragments();
   const [rows] = await pool.query(
-    `SELECT id, type, question, answer, source_line, created_at, updated_at
+    `SELECT id,
+            type,
+            question,
+            answer,
+            source_line,
+            ${choiceSelect.choice1},
+            ${choiceSelect.choice2},
+            ${choiceSelect.choice3},
+            ${choiceSelect.choice4},
+            ${choiceSelect.choices},
+            ${choiceSelect.options},
+            created_at,
+            updated_at
        FROM note_quizzes
       WHERE note_id = ?
         AND (
@@ -1142,7 +1181,7 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
     [noteId, userId]
   );
 
-  res.json(rows);
+  res.json(rows.map(normalizeQuizChoices));
 }));
 
 app.get("/api/notes/:id/user-quizzes", requireLogin, wrap(async (req, res) => {
@@ -1150,12 +1189,19 @@ app.get("/api/notes/:id/user-quizzes", requireLogin, wrap(async (req, res) => {
   const note = await getNoteById(noteId);
   const perm = canEditNote(req, note);
   if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
+  const choiceSelect = await buildNoteQuizSelectChoiceFragments();
 
   const [rows] = await pool.query(
     `SELECT id,
             CONCAT('ノートクイズ #', id) AS title,
             question AS question_text,
             type AS quiz_type,
+            ${choiceSelect.choice1},
+            ${choiceSelect.choice2},
+            ${choiceSelect.choice3},
+            ${choiceSelect.choice4},
+            ${choiceSelect.choices},
+            ${choiceSelect.options},
             answer AS correct_answer,
             created_at
        FROM note_quizzes
@@ -1164,7 +1210,7 @@ app.get("/api/notes/:id/user-quizzes", requireLogin, wrap(async (req, res) => {
     [noteId, req.session.userId]
   );
 
-  res.json({ success: true, data: { quizzes: rows } });
+  res.json({ success: true, data: { quizzes: rows.map(normalizeQuizChoices) } });
 }));
 
 // ============================
@@ -2433,9 +2479,19 @@ app.post("/api/note-quizzes", requireLogin, wrap(async (req, res) => {
   }
 
 const [result] = await pool.query(
-  `INSERT INTO note_quizzes (user_id, note_id, type, question, answer)
-   VALUES (?, ?, ?, ?, ?)`,
-  [req.session.userId, noteId, type, question, answer]
+  `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, choice_1, choice_2, choice_3, choice_4)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  [
+    req.session.userId,
+    noteId,
+    type,
+    question,
+    answer,
+    req.body.choice_1 || req.body.option_1 || null,
+    req.body.choice_2 || req.body.option_2 || null,
+    req.body.choice_3 || req.body.option_3 || null,
+    req.body.choice_4 || req.body.option_4 || null,
+  ]
 );
   res.status(201).json({
     ok: true,
@@ -2462,9 +2518,20 @@ app.post(
     let result;
     try {
       [result] = await pool.query(
-        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, visibility)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [userId, normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility]
+        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, visibility, choice_1, choice_2, choice_3, choice_4)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          normalized.note_id,
+          normalized.quiz_type,
+          normalized.question_text,
+          normalized.correct_answer,
+          normalized.visibility,
+          normalized.choice_1,
+          normalized.choice_2,
+          normalized.choice_3,
+          normalized.choice_4,
+        ]
       );
     } catch (error) {
       console.error("POST /api/quizzes failed", {
@@ -2583,9 +2650,21 @@ app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   try {
     await pool.query(
       `UPDATE note_quizzes
-          SET note_id = ?, type = ?, question = ?, answer = ?, visibility = ?
+          SET note_id = ?, type = ?, question = ?, answer = ?, visibility = ?,
+              choice_1 = ?, choice_2 = ?, choice_3 = ?, choice_4 = ?
         WHERE id = ?`,
-      [normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility, id]
+      [
+        normalized.note_id,
+        normalized.quiz_type,
+        normalized.question_text,
+        normalized.correct_answer,
+        normalized.visibility,
+        normalized.choice_1,
+        normalized.choice_2,
+        normalized.choice_3,
+        normalized.choice_4,
+        id,
+      ]
     );
   } catch (error) {
     console.error("PUT /api/quizzes/:id failed", {

@@ -88,24 +88,37 @@ function buildSearchTarget(qz) {
 }
 
 function getChoiceList(qz) {
-  const direct = [qz.choice_1, qz.choice_2, qz.choice_3, qz.choice_4]
-    .map((c) => String(c || "").trim())
+  const normalizeChoices = (list) => list
+    .map((item) => String(item || "").trim())
     .filter(Boolean);
-  if (direct.length) return direct;
+
+  const direct = normalizeChoices([
+    qz.choice_1,
+    qz.choice_2,
+    qz.choice_3,
+    qz.choice_4,
+    qz.option_1,
+    qz.option_2,
+    qz.option_3,
+    qz.option_4,
+  ]);
+  if (direct.length >= 2) return direct;
 
   const parseArray = (value) => {
     if (!value) return [];
-    if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+    if (Array.isArray(value)) return normalizeChoices(value);
     try {
       const parsed = JSON.parse(String(value));
-      return Array.isArray(parsed) ? parsed.map((item) => String(item || "").trim()).filter(Boolean) : [];
+      return Array.isArray(parsed) ? normalizeChoices(parsed) : [];
     } catch {
       return [];
     }
   };
 
-  const fromJson = parseArray(qz.choices).length ? parseArray(qz.choices) : parseArray(qz.options);
-  if (fromJson.length) return fromJson;
+  const fromArrayFields = parseArray(qz.choices).length
+    ? parseArray(qz.choices)
+    : parseArray(qz.options);
+  if (fromArrayFields.length >= 2) return fromArrayFields;
 
   const lines = String(qz.question_text || "")
     .split(/\r?\n/)
@@ -117,13 +130,14 @@ function getChoiceList(qz) {
     if (m?.[1]) fromQuestion.push(m[1].trim());
     if (fromQuestion.length === 4) break;
   }
-  return fromQuestion;
+  return fromQuestion.length >= 2 ? fromQuestion : [];
 }
+
 
 function renderAnswerUI(qz) {
   if (qz.quiz_type === "multiple_choice") {
     const choices = getChoiceList(qz);
-    if (!choices.length) {
+    if (choices.length < 2) {
       return `
         <div class="small">選択肢データが取得できないため、記述式で回答してください。</div>
         <input type="text" class="quiz-answer-text" data-answer-input="${qz.id}" placeholder="回答を入力" />

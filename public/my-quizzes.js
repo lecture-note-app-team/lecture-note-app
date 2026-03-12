@@ -55,7 +55,10 @@ function renderAnswerUI(qz) {
   if (qz.quiz_type === "multiple_choice") {
     const choices = getChoiceList(qz);
     if (!choices.length) {
-      return "<div class='small'>選択肢が未設定のため、回答できません。</div>";
+      return `
+        <div class="small">選択肢データが取得できないため、記述式で回答してください。</div>
+        <input type="text" class="quiz-answer-text" data-answer-input="${qz.id}" placeholder="回答を入力" />
+      `;
     }
     return `
       <div class="quiz-answer-inputs">
@@ -178,11 +181,17 @@ function render(rows, options = {}) {
       let userAnswer = "";
       if (qz.quiz_type === "multiple_choice" || qz.quiz_type === "true_false") {
         const checked = document.querySelector(`input[name="answer-${id}"]:checked`);
-        if (!checked) {
-          alert("回答を選択してください");
-          return;
+        if (checked) {
+          userAnswer = checked.value;
+        } else {
+          const input = document.querySelector(`[data-answer-input="${id}"]`);
+          const fallbackInputValue = input ? input.value : "";
+          if (!fallbackInputValue.trim()) {
+            alert(qz.quiz_type === "multiple_choice" ? "回答を選択または入力してください" : "回答を選択してください");
+            return;
+          }
+          userAnswer = fallbackInputValue;
         }
-        userAnswer = checked.value;
       } else {
         const input = document.querySelector(`[data-answer-input="${id}"]`);
         userAnswer = input ? input.value : "";

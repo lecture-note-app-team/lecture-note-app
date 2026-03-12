@@ -913,12 +913,17 @@ app.get("/api/notes/:id/quizzes", wrap(async (req, res) => {
   const perm = await canViewNote(req, note);
   if (!perm.ok) return res.status(perm.status).json({ message: perm.message });
 
+  const userId = req.session?.userId || null;
   const [rows] = await pool.query(
     `SELECT id, type, question, answer, source_line, created_at, updated_at
        FROM note_quizzes
       WHERE note_id = ?
+        AND (
+          COALESCE(visibility, 'private') = 'community'
+          OR user_id = ?
+        )
       ORDER BY id ASC`,
-    [noteId]
+    [noteId, userId]
   );
 
   res.json(rows);
@@ -2218,9 +2223,9 @@ app.post(
     let result;
     try {
       [result] = await pool.query(
-        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer)
-         VALUES (?, ?, ?, ?, ?)`,
-        [userId, normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer]
+        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, visibility)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [userId, normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility]
       );
     } catch (error) {
       console.error("POST /api/quizzes failed", {
@@ -2264,7 +2269,7 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
            NULL AS choice_4,
            answer AS correct_answer,
            NULL AS explanation,
-           'private' AS visibility,
+           COALESCE(visibility, 'private') AS visibility,
            created_at,
            updated_at
       FROM note_quizzes
@@ -2300,7 +2305,7 @@ app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
             NULL AS choice_4,
             answer AS correct_answer,
             NULL AS explanation,
-            'private' AS visibility,
+            COALESCE(visibility, 'private') AS visibility,
             created_at,
             updated_at
        FROM note_quizzes
@@ -2332,9 +2337,9 @@ app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   try {
     await pool.query(
       `UPDATE note_quizzes
-          SET note_id = ?, type = ?, question = ?, answer = ?
+          SET note_id = ?, type = ?, question = ?, answer = ?, visibility = ?
         WHERE id = ?`,
-      [normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, id]
+      [normalized.note_id, normalized.quiz_type, normalized.question_text, normalized.correct_answer, normalized.visibility, id]
     );
   } catch (error) {
     console.error("PUT /api/quizzes/:id failed", {

@@ -289,40 +289,77 @@ function subscriptionLabel(subscription, isActiveSubscription, planCode) {
   return subscription.subscription_status || "無効";
 }
 
-function renderFeatureList(features = {}) {
-  const el = $("billingFeatures");
-  if (!el) return;
+function formatUsageLimit(used, limit) {
+  if (Number(limit) === -1) return "無制限";
+  return `${Number(used || 0)} / ${Number(limit || 0)}`;
+}
 
-  const rows = [
-    `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
-    `AI要約: 月 ${Number(features.ai_summary_monthly_limit || 0)} 回`,
-    `クイズ生成: 月 ${Number(features.quiz_generation_monthly_limit || 0)} 回`,
-    `クイズ手動作成: ${features.quiz_creation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_creation_monthly_limit || 0) + " 回"}`,
-    `四択問題不正解回答AI生成: ${features.quiz_distractor_generation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_distractor_generation_monthly_limit || 0) + " 回"}`,
-    `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
+function buildBillingCards(data = {}) {
+  const planCode = data?.planCode || "free";
+  const features = data?.features || {};
+  const usage = data?.usage || {};
+  const notesCount = Number(data?.notes_count || 0);
+
+  return [
+    {
+      label: "現在プラン",
+      value: planLabel(planCode),
+    },
+    {
+      label: "契約状態",
+      value: subscriptionLabel(data?.subscription, data?.isActiveSubscription, planCode),
+    },
+    {
+      label: "ノート上限",
+      value: Number(features.max_notes) === -1 ? "無制限" : formatUsageLimit(notesCount, features.max_notes),
+    },
+    {
+      label: "AI要約（月）",
+      value: formatUsageLimit(usage.ai_summary, features.ai_summary_monthly_limit),
+    },
+    {
+      label: "クイズ生成（月）",
+      value: formatUsageLimit(usage.quiz_generation, features.quiz_generation_monthly_limit),
+    },
+    {
+      label: "クイズ手動作成（月）",
+      value: formatUsageLimit(usage.quiz_creation, features.quiz_creation_monthly_limit),
+    },
+    {
+      label: "四択問題不正解回答AI生成（月）",
+      value: formatUsageLimit(usage.quiz_distractor_generation, features.quiz_distractor_generation_monthly_limit),
+    },
+    {
+      label: "PDF出力",
+      value: features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）",
+    },
   ];
+}
 
-  el.innerHTML = rows.map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+function renderBillingCards(data = {}) {
+  const grid = $("billingUsageGrid");
+  if (!grid) return;
+
+  const cards = buildBillingCards(data);
+  grid.innerHTML = cards.map((card) => `
+    <div class="billing-item">
+      <span>${escapeHtml(card.label)}</span>
+      <b>${escapeHtml(card.value)}</b>
+    </div>
+  `).join("");
 }
 
 function renderBilling(data) {
   const planCode = data?.planCode || "free";
-  const features = data?.features || {};
-  const usage = data?.usage || {};
   const isPro = planCode === "pro";
 
-  $("billingPlan").textContent = planLabel(planCode);
-  $("billingStatus").textContent = subscriptionLabel(data?.subscription, data?.isActiveSubscription, planCode);
-  $("billingAiUsage").textContent = `${Number(usage.ai_summary || 0)} / ${features.ai_summary_monthly_limit ?? "-"}`;
-  $("billingQuizUsage").textContent = `${Number(usage.quiz_generation || 0)} / ${features.quiz_generation_monthly_limit ?? "-"}`;
+  renderBillingCards(data);
 
   const msg = $("billingMessage");
   msg.className = `small ${isPro ? "billing-ok" : "billing-free"}`;
   msg.textContent = isPro
     ? "現在Proプランです。Pro限定機能（PDF出力など）を利用できます。"
     : "現在Freeプランです。PDF出力などはPro登録後に利用できます。";
-
-  renderFeatureList(features);
 
   const btnSubscribe = $("btnSubscribePro");
   const btnCancel = $("btnCancelSubscription");

@@ -18,6 +18,14 @@ function esc(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
 
+function quizTypeLabel(type) {
+  if (type === "multiple_choice") return "4択";
+  if (type === "written") return "記述";
+  if (type === "true_false") return "○×";
+  if (type === "fill_blank") return "穴埋め";
+  return type || "不明";
+}
+
 
 function parseSortTimestamp(qz) {
   const source = qz.updated_at || qz.created_at || qz.saved_at || "";
@@ -106,8 +114,8 @@ function renderAnswerUI(qz) {
     `;
   }
 
-  if (qz.quiz_type === "written") {
-    return `<input type="text" class="quiz-answer-text" data-answer-input="${qz.id}" placeholder="回答を入力" />`;
+  if (qz.quiz_type === "written" || qz.quiz_type === "fill_blank") {
+    return `<input type="text" class="quiz-answer-text" data-answer-input="${qz.id}" placeholder="${qz.quiz_type === "fill_blank" ? "空欄に入る語句を入力" : "回答を入力"}" />`;
   }
 
   if (qz.quiz_type === "true_false") {
@@ -135,7 +143,7 @@ function render(rows, options = {}) {
 
   $("quizList").innerHTML = rows.map((qz, idx) => `
     <div class="card" data-quiz-card="${qz.id}">
-      <div><strong>${esc(qz.title)}</strong> / ${esc(qz.quiz_type)}</div>
+      <div><strong>${esc(qz.title)}</strong> / ${esc(quizTypeLabel(qz.quiz_type))}</div>
       <div class="small">${esc(qz.question_text).slice(0, 120)}</div>
       <div class="small">作成日: ${esc(qz.created_at)}</div>
       <div class="row" style="margin-top:8px;">

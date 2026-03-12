@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS user_quizzes (
   note_id BIGINT UNSIGNED NULL,
   title VARCHAR(100) NOT NULL,
   question_text VARCHAR(500) NOT NULL,
-  quiz_type ENUM('multiple_choice','written','true_false') NOT NULL,
+  quiz_type ENUM('multiple_choice','written','true_false','fill_blank') NOT NULL,
   choice_1 VARCHAR(100) NULL,
   choice_2 VARCHAR(100) NULL,
   choice_3 VARCHAR(100) NULL,

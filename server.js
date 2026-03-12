@@ -318,8 +318,8 @@ function validateUserQuizPayload(payload = {}) {
     errors.push("解説は1000文字以内で入力してください");
   }
 
-  if (!["multiple_choice", "written", "true_false"].includes(normalized.quiz_type)) {
-    errors.push("quiz_type は multiple_choice / written / true_false のいずれかを指定してください");
+  if (!["multiple_choice", "written", "true_false", "fill_blank"].includes(normalized.quiz_type)) {
+    errors.push("quiz_type は multiple_choice / written / true_false / fill_blank のいずれかを指定してください");
   }
 
   if (normalized.quiz_type === "multiple_choice") {
@@ -336,6 +336,12 @@ function validateUserQuizPayload(payload = {}) {
 
   if (normalized.quiz_type === "true_false" && !["○", "×"].includes(normalized.correct_answer)) {
     errors.push("○×問題の正解は「○」または「×」のみです");
+  }
+
+  if (normalized.quiz_type === "fill_blank") {
+    if (!/[（(＿_]{1}|_{3,}/.test(normalized.question_text)) {
+      errors.push("穴埋め問題では、問題文に空欄（例：（　　　））を含めてください");
+    }
   }
 
   if (normalized.quiz_type !== "multiple_choice") {

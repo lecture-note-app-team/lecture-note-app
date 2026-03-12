@@ -24,10 +24,12 @@
       <option value="multiple_choice">4択問題</option>
       <option value="written">記述問題</option>
       <option value="true_false">○×問題</option>
+      <option value="fill_blank">穴埋め問題</option>
     </select>
 
     <label>問題文</label>
     <textarea id="questionText" maxlength="500"></textarea>
+    <div id="questionHelp" class="small" style="margin-top:4px;"></div>
 
     <div id="correctAnswerWrap">
       <label>正解</label>
@@ -58,6 +60,6 @@
     </div>
   </div>
 
-  <script src="./create-quiz.js?v=1"></script>
+  <script src="./create-quiz.js?v=2"></script>
 </body>
 </html>

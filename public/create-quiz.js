@@ -28,14 +28,27 @@ function syncFormByType() {
   const type = $("quizType").value;
   const choicesWrap = $("choicesWrap");
   const correctWrap = $("correctAnswerWrap");
+  const questionHelp = $("questionHelp");
 
   choicesWrap.style.display = type === "multiple_choice" ? "block" : "none";
   correctWrap.style.display = "block";
 
   if (type === "true_false") {
     correctWrap.innerHTML = `<label>正解</label><select id="correctAnswer"><option value="○">○</option><option value="×">×</option></select>`;
+  } else if (type === "fill_blank") {
+    correctWrap.innerHTML = `
+      <label>正答（空欄に入る語句）</label>
+      <input id="correctAnswer" maxlength="200" placeholder="例：東京" />
+      <div class="small" style="margin-top:4px;">問題文には空欄の位置を（　　　）などで明示してください。</div>
+    `;
   } else {
     correctWrap.innerHTML = `<label>正解</label><input id="correctAnswer" maxlength="200" />`;
+  }
+
+  if (questionHelp) {
+    questionHelp.textContent = type === "fill_blank"
+      ? "例：日本の首都は（　　　）です。"
+      : "";
   }
 }
 
@@ -72,14 +85,32 @@ function collectPayload() {
   return payload;
 }
 
+
+function validatePayload(payload) {
+  if (!payload.note_id) {
+    throw new Error("ノートを選択してください");
+  }
+  if (!String(payload.question_text || "").trim()) {
+    throw new Error("問題文を入力してください");
+  }
+  if (!String(payload.correct_answer || "").trim()) {
+    throw new Error("正解を入力してください");
+  }
+
+  if (payload.quiz_type === "fill_blank") {
+    const question = String(payload.question_text || "");
+    if (!question.includes("（") && !question.includes("(") && !question.includes("___")) {
+      throw new Error("穴埋め問題では、問題文に空欄（例：（　　　））を含めてください");
+    }
+  }
+}
+
 async function saveQuiz() {
   const btn = $("btnSave");
   btn.disabled = true;
   try {
     const payload = collectPayload();
-    if (!payload.note_id) {
-      throw new Error("ノートを選択してください");
-    }
+    validatePayload(payload);
     const editId = new URLSearchParams(location.search).get("edit_id");
     const result = await api(editId ? `/api/quizzes/${editId}` : "/api/quizzes", {
       method: editId ? "PUT" : "POST",

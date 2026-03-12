@@ -18,7 +18,13 @@
         <option value="written">記述</option>
         <option value="true_false">○×</option>
       </select>
+      <select id="sortOrder" aria-label="並び順">
+        <option value="newest">新しい順</option>
+        <option value="oldest">古い順</option>
+        <option value="shuffle">シャッフル</option>
+      </select>
       <input id="keyword" type="search" placeholder="キーワードでクイズを検索" aria-label="キーワード検索" />
+      <button id="btnReshuffle" type="button" disabled>再シャッフル</button>
       <button id="btnClearKeyword" type="button">クリア</button>
       <button id="btnReload" type="button">更新</button>
     </div>
@@ -26,6 +32,6 @@
     <div id="quizList"></div>
   </div>
 
-  <script src="./my-quizzes.js?v=3"></script>
+  <script src="./my-quizzes.js?v=4"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 function $(id) { return document.getElementById(id); }
 
 let allRows = [];
+let currentSortOrder = "newest";
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -15,6 +16,39 @@ async function api(path, options = {}) {
 
 function esc(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+
+function parseSortTimestamp(qz) {
+  const source = qz.updated_at || qz.created_at || qz.saved_at || "";
+  const t = Date.parse(source);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function shuffleRows(rows) {
+  const cloned = rows.slice();
+  for (let i = cloned.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cloned[i], cloned[j]] = [cloned[j], cloned[i]];
+  }
+  return cloned;
+}
+
+function sortRows(rows, sortOrder) {
+  const cloned = rows.slice();
+  if (sortOrder === "oldest") {
+    return cloned.sort((a, b) => parseSortTimestamp(a) - parseSortTimestamp(b));
+  }
+  if (sortOrder === "shuffle") {
+    return shuffleRows(cloned);
+  }
+  return cloned.sort((a, b) => parseSortTimestamp(b) - parseSortTimestamp(a));
+}
+
+function updateSortUI() {
+  const reshuffleBtn = $("btnReshuffle");
+  if (!reshuffleBtn) return;
+  reshuffleBtn.disabled = currentSortOrder !== "shuffle";
 }
 
 function normalizeForSearch(s) {
@@ -240,8 +274,10 @@ function applyFilters() {
   const filteredRows = keyword
     ? allRows.filter((qz) => buildSearchTarget(qz).includes(keyword))
     : allRows;
+  const sortedRows = sortRows(filteredRows, currentSortOrder);
 
-  render(filteredRows, { keyword });
+  updateSortUI();
+  render(sortedRows, { keyword });
 }
 
 async function load() {
@@ -255,11 +291,21 @@ async function load() {
 (async () => {
   $("btnReload").addEventListener("click", load);
   $("filterType").addEventListener("change", load);
+  $("sortOrder").addEventListener("change", () => {
+    currentSortOrder = $("sortOrder").value || "newest";
+    applyFilters();
+  });
+  $("btnReshuffle").addEventListener("click", () => {
+    if (currentSortOrder !== "shuffle") return;
+    applyFilters();
+  });
   $("keyword").addEventListener("input", applyFilters);
   $("btnClearKeyword").addEventListener("click", () => {
     $("keyword").value = "";
     applyFilters();
     $("keyword").focus();
   });
+  $("sortOrder").value = currentSortOrder;
+  updateSortUI();
   await load();
 })();

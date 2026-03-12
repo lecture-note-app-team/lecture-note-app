@@ -88,9 +88,36 @@ function buildSearchTarget(qz) {
 }
 
 function getChoiceList(qz) {
-  return [qz.choice_1, qz.choice_2, qz.choice_3, qz.choice_4]
-    .filter((c) => String(c || "").trim())
-    .map((c) => String(c));
+  const direct = [qz.choice_1, qz.choice_2, qz.choice_3, qz.choice_4]
+    .map((c) => String(c || "").trim())
+    .filter(Boolean);
+  if (direct.length) return direct;
+
+  const parseArray = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+    try {
+      const parsed = JSON.parse(String(value));
+      return Array.isArray(parsed) ? parsed.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const fromJson = parseArray(qz.choices).length ? parseArray(qz.choices) : parseArray(qz.options);
+  if (fromJson.length) return fromJson;
+
+  const lines = String(qz.question_text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const fromQuestion = [];
+  for (const line of lines) {
+    const m = line.match(/^(?:[1-4][\.)．、]|[①-④]|[Ａ-ＤA-D][\.)．、:：]|[a-d][\.)．、:：])\s*(.+)$/u);
+    if (m?.[1]) fromQuestion.push(m[1].trim());
+    if (fromQuestion.length === 4) break;
+  }
+  return fromQuestion;
 }
 
 function renderAnswerUI(qz) {

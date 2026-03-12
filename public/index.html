@@ -16,6 +16,9 @@
     .hint { margin-top:6px; }
     .row2 { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .inline { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .image-status.success { color: #0a7a22; }
+    .image-status.error { color: #b42318; }
+    .image-status.warn { color: #9a6b00; }
   </style>
 </head>
 <body>
@@ -68,6 +71,14 @@
         <input id="title" placeholder="例：需要と供給" />
       </div>
     </div>
+
+    <label>画像からノート作成（手書きノート写真 / スクショ対応）</label>
+    <div class="row2">
+      <input id="note_image" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+      <button id="btnExtractImageText" type="button">画像から文字を抽出</button>
+    </div>
+    <div class="small hint">対応形式: jpg / jpeg / png / webp（最大6MB）</div>
+    <div id="image_status" class="small hint image-status">画像をアップロードして本文に反映できます。</div>
 
     <label>本文（メモ）</label>
     <textarea id="body_raw" placeholder="例：

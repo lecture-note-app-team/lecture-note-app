@@ -42,7 +42,15 @@ function getForm() {
     title: $("title")?.value.trim() || "",
     body_raw: $("body_raw")?.value.trim() || "",
     visibility: $("visibility")?.value || "public",
+    source_type: window.__noteSourceType || "text",
   };
+}
+
+function setImageStatus(message, kind = "info") {
+  const el = $("image_status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `small hint image-status ${kind}`;
 }
 
 function setPreview(text) {
@@ -119,6 +127,62 @@ async function refreshList() {
       </div>
     `;
     el.appendChild(div);
+  }
+}
+
+async function onExtractImageText() {
+  const fileInput = $("note_image");
+  const file = fileInput?.files?.[0];
+
+  if (!file) {
+    setImageStatus("画像ファイルを選択してください。", "warn");
+    return;
+  }
+
+  setImageStatus("画像を解析中です...", "info");
+
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const b64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
+        resolve(b64);
+      };
+      reader.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+      reader.readAsDataURL(file);
+    });
+
+    const res = await fetch("/api/notes/extract-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_base64: base64,
+        mime_type: file.type,
+        file_name: file.name,
+        file_size: file.size,
+      }),
+    });
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch {}
+
+    if (!res.ok) {
+      const msg = data?.message || text || "画像からの文字抽出に失敗しました";
+      throw new Error(msg);
+    }
+
+    const extracted = String(data?.text || "").trim();
+    if (!extracted) {
+      throw new Error("画像から文字を抽出できませんでした。鮮明な画像で再試行してください。");
+    }
+
+    if ($("body_raw")) $("body_raw").value = extracted;
+    window.__noteSourceType = "image";
+    setImageStatus("文字を抽出しました。必要に応じて本文を編集して保存してください。", "success");
+  } catch (e) {
+    window.__noteSourceType = "text";
+    setImageStatus(e.message, "error");
   }
 }
 
@@ -206,7 +270,10 @@ function syncUniversityToSearch() {
   if ($("university_search")) $("university_search").value = v;
 }
 
+window.__noteSourceType = "text";
+
 // ---- 初期化 ----
+$("btnExtractImageText")?.addEventListener("click", onExtractImageText);
 $("btnPreview")?.addEventListener("click", onPreview);
 $("btnSave")?.addEventListener("click", onSave);
 $("btnSearch")?.addEventListener("click", refreshList);
@@ -216,6 +283,12 @@ $("university_search")?.addEventListener("keydown", (e) => {
 });
 $("course_search")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") refreshList();
+});
+
+$("body_raw")?.addEventListener("input", () => {
+  if (!$("note_image")?.files?.length) {
+    window.__noteSourceType = "text";
+  }
 });
 
 $("university_name")?.addEventListener("input", syncUniversityToSearch);

@@ -63,7 +63,7 @@ if (process.env.NODE_ENV === "production") {
 
 // ---------- Middlewares ----------
 app.use(express.json({
-  limit: "1mb",
+  limit: "10mb",
   verify: (req, res, buf) => {
     if (req.originalUrl === "/api/billing/webhook") {
       req.rawBody = buf;
@@ -135,6 +135,10 @@ const pool = mysqlPromise.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 });
+
+const OCR_ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const OCR_ALLOWED_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const OCR_MAX_FILE_SIZE_BYTES = 6 * 1024 * 1024;
 
 // --------権限チェック関数-------(admin/memberが承認OK)
 async function userRoleInCommunity(userId, communityId) {
@@ -421,6 +425,73 @@ async function generateQuizzesForNote(note, options = {}) {
     targetCount: options.limit || 10,
     logger: console,
   });
+}
+
+async function getPlanContextForUser(userId) {
+  const subscription = await getUserSubscription(userId);
+  const planCode = resolvePlanCode(subscription);
+  const features = PLAN_FEATURES[planCode] || PLAN_FEATURES.free;
+  return { subscription, planCode, features };
+}
+
+async function ensureNoteSaveAvailable(userId) {
+  const plan = await getPlanContextForUser(userId);
+  const maxNotes = Number(plan.features?.max_notes ?? -1);
+  if (maxNotes < 0) return { ok: true, ...plan };
+
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS note_count
+       FROM notes
+      WHERE user_id = ?`,
+    [userId]
+  );
+  const currentCount = Number(rows?.[0]?.note_count || 0);
+  if (currentCount >= maxNotes) {
+    return {
+      ok: false,
+      ...plan,
+      currentCount,
+      maxNotes,
+      message: "無料プランではノート保存は30件までです。有料プランで無制限になります。",
+    };
+  }
+  return { ok: true, ...plan, currentCount, maxNotes };
+}
+
+async function extractTextFromImageWithOpenAI({ base64Image, mimetype }) {
+  if (!base64Image || !mimetype) {
+    throw new Error("IMAGE_FILE_REQUIRED");
+  }
+
+  const openai = getOpenAIClient();
+  const dataUri = `data:${mimetype};base64,${base64Image}`;
+
+  const prompt = [
+    "あなたはOCRエンジンです。与えられたノート画像から読める文字だけを抽出してください。",
+    "出力はプレーンテキストのみ。説明・補足・Markdown記法は不要です。",
+    "読めない箇所は無理に補完せず、省略してください。",
+  ].join("\n");
+
+  const resp = await openai.responses.create({
+    model: process.env.OPENAI_OCR_MODEL || "gpt-4.1-mini",
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          { type: "input_image", image_url: dataUri },
+        ],
+      },
+    ],
+  });
+
+  const text = String(resp.output_text || "").trim();
+  if (!text) {
+    const err = new Error("OCR_EMPTY_RESULT");
+    err.statusCode = 422;
+    throw err;
+  }
+  return text;
 }
 
 // 自分の参加コミュ一覧（コミュ名 + メンバー数つき）
@@ -719,7 +790,7 @@ app.get("/api/notes", wrap(async (req, res) => {
   let rows;
   if (course) {
     [rows] = await pool.query(
-      `SELECT id, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
+      `SELECT id, source_type, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
          FROM notes
         WHERE university_id = ? AND visibility = 'public' AND community_id IS NULL AND course_name LIKE ?
         ORDER BY lecture_date DESC, id DESC`,
@@ -727,7 +798,7 @@ app.get("/api/notes", wrap(async (req, res) => {
     );
   } else {
     [rows] = await pool.query(
-      `SELECT id, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
+      `SELECT id, source_type, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
          FROM notes
         WHERE university_id = ? AND visibility = 'public' AND community_id IS NULL
         ORDER BY lecture_date DESC, id DESC`,
@@ -755,7 +826,7 @@ app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
   // ※ notes に community_id が入っている前提
   const [rows] = await pool.query(
     `SELECT
-        n.id, n.community_id, n.user_id, n.visibility,
+        n.id, n.community_id, n.user_id, n.visibility, n.source_type,
         n.author_name, n.course_name, n.lecture_no, n.lecture_date, n.title, n.created_at,
         c.name AS community_name
      FROM notes n
@@ -793,6 +864,42 @@ app.post("/api/notes/preview", wrap(async (req, res) => {
   res.json({ body_md });
 }));
 
+app.post("/api/notes/extract-text", requireLogin, wrap(async (req, res) => {
+  const { image_base64, mime_type, file_name, file_size } = req.body || {};
+  const mimeType = String(mime_type || "").toLowerCase();
+  const fileName = String(file_name || "");
+  const ext = path.extname(fileName).toLowerCase();
+  const fileSize = Number(file_size || 0);
+
+  if (!image_base64 || !mimeType || !fileName || !fileSize) {
+    return res.status(400).json({ message: "画像データが不足しています。", code: "IMAGE_FILE_REQUIRED" });
+  }
+
+  if (!OCR_ALLOWED_MIME_TYPES.has(mimeType) || !OCR_ALLOWED_EXTENSIONS.has(ext)) {
+    return res.status(400).json({
+      message: "対応していない画像形式です。jpg / jpeg / png / webp をアップロードしてください。",
+      code: "UNSUPPORTED_IMAGE_TYPE",
+    });
+  }
+
+  if (fileSize > OCR_MAX_FILE_SIZE_BYTES) {
+    return res.status(400).json({
+      message: `画像サイズが大きすぎます。最大${Math.floor(OCR_MAX_FILE_SIZE_BYTES / (1024 * 1024))}MBまでです。`,
+      code: "FILE_TOO_LARGE",
+    });
+  }
+
+  const extractedText = await extractTextFromImageWithOpenAI({ base64Image: String(image_base64), mimetype: mimeType });
+  if (!extractedText || extractedText.length < 10) {
+    return res.status(422).json({
+      message: "画像から十分な文字を抽出できませんでした。鮮明な画像で再度お試しください。",
+      code: "OCR_TEXT_TOO_SHORT",
+    });
+  }
+
+  res.json({ text: extractedText, source_type: "image" });
+}));
+
 // 保存（投稿）：ログイン必須
 // community_id がある場合は所属必須。大学名が空なら「（コミュ）」で補完（DB要件対策）
 app.post("/api/notes", requireLogin, wrap(async (req, res) => {
@@ -808,15 +915,16 @@ app.post("/api/notes", requireLogin, wrap(async (req, res) => {
     body_raw,
     visibility,
     community_id,
+    source_type,
   } = req.body;
 
   const communityId = community_id ? Number(community_id) : null;
+  const sourceType = source_type === "image" ? "image" : "text";
 
   if (communityId && !String(university_name || "").trim()) {
     university_name = "（コミュ）";
   }
 
-  // 必須チェック（コミュ投稿なら大学名は補完されるのでOK）
   if (!university_name || !course_name || !lecture_no || !lecture_date || !title || !body_raw) {
     return res.status(400).json({ message: "missing fields" });
   }
@@ -826,13 +934,23 @@ app.post("/api/notes", requireLogin, wrap(async (req, res) => {
     if (!belongs) return res.status(403).json({ message: "not a community member" });
   }
 
+  const noteLimit = await ensureNoteSaveAvailable(user_id);
+  if (!noteLimit.ok) {
+    return res.status(403).json({
+      message: noteLimit.message,
+      code: "NOTE_SAVE_LIMIT_EXCEEDED",
+      limit: noteLimit.maxNotes,
+      current: noteLimit.currentCount,
+    });
+  }
+
   const university_id = await getOrCreateUniversityId(university_name);
   const body_md = buildMarkdown({ course_name, lecture_no, lecture_date, title, body_raw });
   const vis = normalizeVisibility(visibility);
 
   const [result] = await pool.query(
-    `INSERT INTO notes (user_id, community_id, university_id, author_name, course_name, lecture_no, lecture_date, title, body_raw, body_md, visibility)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO notes (user_id, community_id, university_id, author_name, course_name, lecture_no, lecture_date, title, body_raw, body_md, visibility, source_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       user_id,
       communityId,
@@ -845,10 +963,11 @@ app.post("/api/notes", requireLogin, wrap(async (req, res) => {
       body_raw,
       body_md,
       vis,
+      sourceType,
     ]
   );
 
-  res.status(201).json({ id: result.insertId });
+  res.status(201).json({ id: result.insertId, source_type: sourceType });
 }));
 
 // マイページ：自分のノート一覧（public/private両方、ログイン必須）
@@ -856,7 +975,7 @@ app.get("/api/my-notes", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;
 
   const [rows] = await pool.query(
-    `SELECT id, community_id, visibility, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
+    `SELECT id, community_id, visibility, source_type, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
        FROM notes
       WHERE user_id = ?
       ORDER BY lecture_date DESC, id DESC`,
@@ -2115,6 +2234,14 @@ const handleGenerateQuiz = [
     const perm = canEditNote(req, note);
     if (!perm.ok) {
       return res.status(perm.status).json({ message: perm.message });
+    }
+
+    const rawText = String(note?.body_raw || "").trim();
+    if (rawText.length < 20) {
+      return res.status(422).json({
+        message: "ノート本文が短すぎるためクイズ生成できません。内容を追記してから再実行してください。",
+        code: "NOTE_CONTENT_TOO_SHORT",
+      });
     }
 
     let quizzes = [];

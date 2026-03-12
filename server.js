@@ -1877,6 +1877,16 @@ async function incrementUsageCount(userId, featureCode, incrementBy = 1, periodM
   );
 }
 
+async function getUserNotesCount(userId) {
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS note_count
+       FROM notes
+      WHERE user_id = ?`,
+    [userId]
+  );
+  return Number(rows?.[0]?.note_count || 0);
+}
+
 async function ensureStripeCustomerForUser(userId) {
   const [rows] = await pool.query("SELECT id, username, stripe_customer_id FROM users WHERE id = ? LIMIT 1", [userId]);
   if (!rows.length) throw new Error("user not found");
@@ -2149,6 +2159,7 @@ app.get("/api/billing/me", requireLogin, wrap(async (req, res) => {
   const subscription = await getUserSubscription(req.session.userId);
   const planCode = resolvePlanCode(subscription);
   const features = PLAN_FEATURES[planCode];
+  const notesCount = await getUserNotesCount(req.session.userId);
 
   const usage = {
     ai_summary: await getUsageCount(req.session.userId, "ai_summary"),
@@ -2164,6 +2175,7 @@ app.get("/api/billing/me", requireLogin, wrap(async (req, res) => {
     subscription,
     features,
     usage,
+    notes_count: notesCount,
   });
 }));
 

@@ -289,16 +289,21 @@ function subscriptionLabel(subscription, isActiveSubscription, planCode) {
   return subscription.subscription_status || "無効";
 }
 
-function renderFeatureList(features = {}) {
+function formatUsageLimit(used, limit) {
+  if (Number(limit) === -1) return "無制限";
+  return `${Number(used || 0)} / ${Number(limit || 0)}`;
+}
+
+function renderFeatureList(features = {}, usage = {}, notesCount = 0) {
   const el = $("billingFeatures");
   if (!el) return;
 
   const rows = [
-    `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
-    `AI要約: 月 ${Number(features.ai_summary_monthly_limit || 0)} 回`,
-    `クイズ生成: 月 ${Number(features.quiz_generation_monthly_limit || 0)} 回`,
-    `クイズ手動作成: ${features.quiz_creation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_creation_monthly_limit || 0) + " 回"}`,
-    `四択問題不正解回答AI生成: ${features.quiz_distractor_generation_monthly_limit === -1 ? "無制限" : "月 " + Number(features.quiz_distractor_generation_monthly_limit || 0) + " 回"}`,
+    `ノート上限: ${Number(features.max_notes) === -1 ? "無制限" : formatUsageLimit(notesCount, features.max_notes)}`,
+    `AI要約: ${formatUsageLimit(usage.ai_summary, features.ai_summary_monthly_limit)}`,
+    `クイズ生成: ${formatUsageLimit(usage.quiz_generation, features.quiz_generation_monthly_limit)}`,
+    `クイズ手動作成: ${formatUsageLimit(usage.quiz_creation, features.quiz_creation_monthly_limit)}`,
+    `四択問題不正解回答AI生成: ${formatUsageLimit(usage.quiz_distractor_generation, features.quiz_distractor_generation_monthly_limit)}`,
     `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
   ];
 
@@ -309,6 +314,7 @@ function renderBilling(data) {
   const planCode = data?.planCode || "free";
   const features = data?.features || {};
   const usage = data?.usage || {};
+  const notesCount = Number(data?.notes_count || 0);
   const isPro = planCode === "pro";
 
   $("billingPlan").textContent = planLabel(planCode);
@@ -322,7 +328,7 @@ function renderBilling(data) {
     ? "現在Proプランです。Pro限定機能（PDF出力など）を利用できます。"
     : "現在Freeプランです。PDF出力などはPro登録後に利用できます。";
 
-  renderFeatureList(features);
+  renderFeatureList(features, usage, notesCount);
 
   const btnSubscribe = $("btnSubscribePro");
   const btnCancel = $("btnCancelSubscription");

@@ -11,7 +11,8 @@
   <h1>クイズ作成</h1>
 
   <div class="card">
-    <div id="message" class="small" role="status" aria-live="polite">読み込み中…</div>
+    <div id="message" class="small">読み込み中…</div>
+    <div id="message_announce" role="status" aria-live="polite" style="position:absolute;left:-9999px;">読み込み中…</div>
     <label>クイズタイトル（任意）</label>
     <input id="title" maxlength="100" placeholder="未入力の場合は「無題のクイズ」" />
 

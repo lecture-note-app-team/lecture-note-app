@@ -239,9 +239,9 @@ async function tryGenerateQuiz(noteId) {
 async function onSave() {
   try {
     const data = getForm();
+    setSaveAnnouncement("", "info");
     if (!validateForSave(data)) return;
 
-    setSaveAnnouncement("", "info");
 
     const r = await api("/api/notes", {
       method: "POST",

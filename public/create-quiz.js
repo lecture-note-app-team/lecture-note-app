@@ -14,8 +14,14 @@ async function api(path, options = {}) {
 
 function setMessage(msg, isError = false) {
   const el = $("message");
-  el.textContent = msg;
-  el.style.color = isError ? "#b91c1c" : "#334155";
+  const announceEl = $("message_announce");
+  if (el) {
+    el.textContent = msg;
+    el.style.color = isError ? "#b91c1c" : "#334155";
+  }
+  if (announceEl) {
+    announceEl.textContent = msg;
+  }
 }
 
 function syncFormByType() {
@@ -79,7 +85,7 @@ async function saveQuiz() {
       method: editId ? "PUT" : "POST",
       body: JSON.stringify(payload),
     });
-    setMessage("保存されました");
+    setMessage(editId ? "更新されました" : "保存されました");
   } catch (e) {
     console.error("saveQuiz failed", e);
     setMessage(e.message, true);

@@ -864,7 +864,7 @@ app.post("/api/notes/preview", wrap(async (req, res) => {
   res.json({ body_md });
 }));
 
-app.post("/api/notes/extract-text", requireLogin, wrap(async (req, res) => {
+app.post("/api/notes/extract-text", requireLogin, requireUsageLimit("ocr_extraction", "ocr_extraction_monthly_limit"), wrap(async (req, res) => {
   const { image_base64, mime_type, file_name, file_size } = req.body || {};
   const mimeType = String(mime_type || "").toLowerCase();
   const fileName = String(file_name || "");
@@ -897,7 +897,17 @@ app.post("/api/notes/extract-text", requireLogin, wrap(async (req, res) => {
     });
   }
 
-  res.json({ text: extractedText, source_type: "image" });
+  await incrementUsageCount(req.session.userId, "ocr_extraction", 1);
+
+  res.json({
+    text: extractedText,
+    source_type: "image",
+    usage: {
+      featureCode: "ocr_extraction",
+      usedAfter: (req.usageLimit?.used || 0) + 1,
+      limit: req.usageLimit?.limit,
+    },
+  });
 }));
 
 // 保存（投稿）：ログイン必須
@@ -1801,6 +1811,7 @@ const PLAN_FEATURES = {
     quiz_generation_monthly_limit: 10,
     quiz_creation_monthly_limit: 10,
     quiz_distractor_generation_monthly_limit: 20,
+    ocr_extraction_monthly_limit: 20,
     max_custom_quizzes: 30,
     can_export_pdf: false,
   },
@@ -1810,6 +1821,7 @@ const PLAN_FEATURES = {
     quiz_generation_monthly_limit: 300,
     quiz_creation_monthly_limit: -1,
     quiz_distractor_generation_monthly_limit: -1,
+    ocr_extraction_monthly_limit: -1,
     max_custom_quizzes: 1000,
     can_export_pdf: true,
   },
@@ -2143,6 +2155,7 @@ app.get("/api/billing/me", requireLogin, wrap(async (req, res) => {
     quiz_generation: await getUsageCount(req.session.userId, "quiz_generation"),
     quiz_creation: await getUsageCount(req.session.userId, "quiz_creation"),
     quiz_distractor_generation: await getUsageCount(req.session.userId, "quiz_distractor_generation"),
+    ocr_extraction: await getUsageCount(req.session.userId, "ocr_extraction"),
   };
 
   res.json({

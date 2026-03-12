@@ -359,6 +359,82 @@ function validateUserQuizPayload(payload = {}) {
   return { normalized, errors };
 }
 
+let noteQuizColumnsCache = null;
+
+async function getNoteQuizColumns() {
+  if (noteQuizColumnsCache) return noteQuizColumnsCache;
+  const [rows] = await pool.query("SHOW COLUMNS FROM note_quizzes");
+  noteQuizColumnsCache = new Set(rows.map((row) => String(row.Field || "").toLowerCase()));
+  return noteQuizColumnsCache;
+}
+
+function parseJsonArraySafe(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((v) => String(v || "").trim()).filter(Boolean);
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function extractChoicesFromQuestionText(questionText) {
+  const lines = String(questionText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const parsed = [];
+  for (const line of lines) {
+    const match = line.match(/^(?:[1-4][\.)．、]|[①-④]|[Ａ-ＤA-D][\.)．、:：]|[a-d][\.)．、:：])\s*(.+)$/u);
+    if (match?.[1]) parsed.push(match[1].trim());
+    if (parsed.length === 4) break;
+  }
+  return parsed;
+}
+
+function normalizeQuizChoices(row = {}) {
+  const directChoices = [row.choice_1, row.choice_2, row.choice_3, row.choice_4]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  if (directChoices.length) {
+    return {
+      ...row,
+      choice_1: directChoices[0] || null,
+      choice_2: directChoices[1] || null,
+      choice_3: directChoices[2] || null,
+      choice_4: directChoices[3] || null,
+    };
+  }
+
+  const jsonChoices = parseJsonArraySafe(row.choices).length
+    ? parseJsonArraySafe(row.choices)
+    : parseJsonArraySafe(row.options);
+  const fallbackChoices = jsonChoices.length ? jsonChoices : extractChoicesFromQuestionText(row.question_text);
+
+  return {
+    ...row,
+    choice_1: fallbackChoices[0] || null,
+    choice_2: fallbackChoices[1] || null,
+    choice_3: fallbackChoices[2] || null,
+    choice_4: fallbackChoices[3] || null,
+  };
+}
+
+async function buildNoteQuizSelectChoiceFragments() {
+  const columns = await getNoteQuizColumns();
+  return {
+    choice1: columns.has("choice_1") ? "choice_1" : "NULL AS choice_1",
+    choice2: columns.has("choice_2") ? "choice_2" : "NULL AS choice_2",
+    choice3: columns.has("choice_3") ? "choice_3" : "NULL AS choice_3",
+    choice4: columns.has("choice_4") ? "choice_4" : "NULL AS choice_4",
+    choices: columns.has("choices") ? "choices" : "NULL AS choices",
+    options: columns.has("options") ? "options" : "NULL AS options",
+  };
+}
+
 async function generateQuizzesWithAI({ title, course_name, body_raw }) {
   const openai = getOpenAIClient();
   const body = String(body_raw || "").slice(0, 8000);
@@ -2418,6 +2494,7 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;
   const noteId = req.query.note_id ? Number(req.query.note_id) : null;
   const quizType = String(req.query.quiz_type || "").trim();
+  const choiceSelect = await buildNoteQuizSelectChoiceFragments();
 
   let sql = `
     SELECT id,
@@ -2426,10 +2503,12 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
            CONCAT('ノートクイズ #', id) AS title,
            question AS question_text,
            type AS quiz_type,
-           NULL AS choice_1,
-           NULL AS choice_2,
-           NULL AS choice_3,
-           NULL AS choice_4,
+           ${choiceSelect.choice1},
+           ${choiceSelect.choice2},
+           ${choiceSelect.choice3},
+           ${choiceSelect.choice4},
+           ${choiceSelect.choices},
+           ${choiceSelect.options},
            answer AS correct_answer,
            NULL AS explanation,
            COALESCE(visibility, 'private') AS visibility,
@@ -2450,11 +2529,13 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
   sql += " ORDER BY created_at DESC, id DESC";
 
   const [rows] = await pool.query(sql, params);
-  res.json({ success: true, data: { quizzes: rows } });
+  const normalizedRows = rows.map(normalizeQuizChoices);
+  res.json({ success: true, data: { quizzes: normalizedRows } });
 }));
 
 app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   const id = Number(req.params.id);
+  const choiceSelect = await buildNoteQuizSelectChoiceFragments();
   const [rows] = await pool.query(
     `SELECT id,
             user_id,
@@ -2462,10 +2543,12 @@ app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
             CONCAT('ノートクイズ #', id) AS title,
             question AS question_text,
             type AS quiz_type,
-            NULL AS choice_1,
-            NULL AS choice_2,
-            NULL AS choice_3,
-            NULL AS choice_4,
+            ${choiceSelect.choice1},
+            ${choiceSelect.choice2},
+            ${choiceSelect.choice3},
+            ${choiceSelect.choice4},
+            ${choiceSelect.choices},
+            ${choiceSelect.options},
             answer AS correct_answer,
             NULL AS explanation,
             COALESCE(visibility, 'private') AS visibility,
@@ -2479,7 +2562,7 @@ app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   if (!rows.length) return res.status(404).json({ message: "not found" });
   if (rows[0].user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
 
-  res.json({ success: true, data: rows[0] });
+  res.json({ success: true, data: normalizeQuizChoices(rows[0]) });
 }));
 
 app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {

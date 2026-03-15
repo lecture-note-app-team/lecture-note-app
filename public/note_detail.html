@@ -35,6 +35,14 @@
     <h2>クイズ（本文から自動生成）</h2>
 
     <div class="row2" style="margin: 8px 0;">
+      <!-- 手動作成と同じ quiz_type を自動生成でも選択できるようにする -->
+      <label for="autoQuizType" class="small">形式</label>
+      <select id="autoQuizType">
+        <option value="multiple_choice">4択問題</option>
+        <option value="written">一問一答</option>
+        <option value="true_false">○×問題</option>
+        <option value="fill_blank">穴埋め問題</option>
+      </select>
       <button id="btnGenQuiz" type="button">AIでクイズ生成</button>
       <button id="btnReloadQuiz" type="button">更新</button>
       <span class="small">※ノートが公開ならクイズも同じ範囲で公開</span>
@@ -78,6 +86,32 @@
         .replaceAll("'", "&#039;");
     }
 
+    function formatQuizTypeLabel(type) {
+      if (type === "multiple_choice") return "4択問題";
+      if (type === "written") return "一問一答";
+      if (type === "true_false") return "○×問題";
+      if (type === "fill_blank") return "穴埋め問題";
+      return type || "不明";
+    }
+
+    function renderChoices(q) {
+      if (q.type === "true_false") {
+        return '<div style="margin-top:6px; color:#555;">選択肢: ○ / ×</div>';
+      }
+      if (q.type !== "multiple_choice") return "";
+
+      const choices = [q.choice_1, q.choice_2, q.choice_3, q.choice_4]
+        .map((c) => String(c || "").trim())
+        .filter(Boolean);
+      if (!choices.length) return "";
+
+      return `
+        <ol style="margin-top:6px; padding-left:20px; color:#555;">
+          ${choices.map((choice) => `<li>${escapeHtml(choice)}</li>`).join("")}
+        </ol>
+      `;
+    }
+
     async function loadQuizzes(noteId) {
       const list = document.getElementById("quizList");
       list.textContent = "読み込み中...";
@@ -93,8 +127,9 @@
         return `
           <div style="border:1px solid #eee; border-radius:10px; padding:10px; margin:10px 0;">
             <div><strong>Q${i+1}.</strong> ${escapeHtml(q.question)}</div>
+            ${renderChoices(q)}
             <div style="margin-top:6px; color:#555;"><strong>A.</strong> ${escapeHtml(ans)}</div>
-            <div style="margin-top:6px; color:#888; font-size:12px;">type: ${escapeHtml(q.type)}</div>
+            <div style="margin-top:6px; color:#888; font-size:12px;">形式: ${escapeHtml(formatQuizTypeLabel(q.type))}</div>
           </div>
         `;
       }).join("");
@@ -155,10 +190,11 @@
 
       document.getElementById("btnGenQuiz").addEventListener("click", async () => {
         try {
+          const quizType = document.getElementById("autoQuizType").value;
           await api(`/api/notes/${id}/quizzes/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: "replace", engine: "ai" })
+            body: JSON.stringify({ mode: "replace", engine: "ai", quiz_type: quizType })
           });
           await loadQuizzes(id);
           alert("クイズを生成しました！");

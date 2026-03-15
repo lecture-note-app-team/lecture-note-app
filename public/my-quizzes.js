@@ -19,7 +19,7 @@ function esc(s) {
 }
 
 function quizTypeLabel(type) {
-  if (type === "multiple_choice") return "4択";
+  if (type === "multiple_choice" || type === "mcq") return "4択";
   if (type === "written") return "記述";
   if (type === "true_false") return "○×";
   if (type === "fill_blank") return "穴埋め";
@@ -135,7 +135,7 @@ function getChoiceList(qz) {
 
 
 function renderAnswerUI(qz) {
-  if (qz.quiz_type === "multiple_choice") {
+  if (qz.quiz_type === "multiple_choice" || qz.quiz_type === "mcq") {
     const choices = getChoiceList(qz);
     if (choices.length < 2) {
       return `
@@ -262,7 +262,7 @@ function render(rows, options = {}) {
       if (!qz) return;
 
       let userAnswer = "";
-      if (qz.quiz_type === "multiple_choice" || qz.quiz_type === "true_false") {
+      if (qz.quiz_type === "multiple_choice" || qz.quiz_type === "mcq" || qz.quiz_type === "true_false") {
         const checked = document.querySelector(`input[name="answer-${id}"]:checked`);
         if (checked) {
           userAnswer = checked.value;
@@ -270,7 +270,7 @@ function render(rows, options = {}) {
           const input = document.querySelector(`[data-answer-input="${id}"]`);
           const fallbackInputValue = input ? input.value : "";
           if (!fallbackInputValue.trim()) {
-            alert(qz.quiz_type === "multiple_choice" ? "回答を選択または入力してください" : "回答を選択してください");
+            alert((qz.quiz_type === "multiple_choice" || qz.quiz_type === "mcq") ? "回答を選択または入力してください" : "回答を選択してください");
             return;
           }
           userAnswer = fallbackInputValue;

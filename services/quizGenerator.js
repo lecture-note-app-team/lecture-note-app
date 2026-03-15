@@ -3,6 +3,7 @@ const { buildExtractPointsPrompt, buildQuizPrompt } = require("./quizPromptBuild
 const { parseAndValidateQuizResponse, filterLowQualityQuizzes } = require("./quizValidator");
 
 const DEFAULT_MODEL = process.env.OPENAI_QUIZ_MODEL || "gpt-4.1-mini";
+const SUPPORTED_QUIZ_TYPES = ["multiple_choice", "written", "true_false", "fill_blank"];
 
 function shuffleInPlace(items, random = Math.random) {
   for (let i = items.length - 1; i > 0; i--) {
@@ -61,13 +62,76 @@ function summarizeAnswerPositionDistribution(quizzes) {
   };
 }
 
-function formatQuizForStorage(quiz) {
-  const choicesText = quiz.choices.map((c, i) => `${i + 1}. ${c}`).join("\n");
+function formatMultipleChoiceQuizForStorage(quiz) {
   return {
-    type: "mcq",
-    question: `${quiz.question}\n${choicesText}`,
-    answer: quiz.choices[quiz.answerIndex],
+    type: "multiple_choice",
+    question: String(quiz.question || "").trim(),
+    answer: String(quiz.choices[quiz.answerIndex] || "").trim(),
     source_line: null,
+    choice_1: String(quiz.choices[0] || "").trim() || null,
+    choice_2: String(quiz.choices[1] || "").trim() || null,
+    choice_3: String(quiz.choices[2] || "").trim() || null,
+    choice_4: String(quiz.choices[3] || "").trim() || null,
+  };
+}
+
+function extractJsonBlock(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const m = String(text || "").match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("AIの返答がJSONとして解析できませんでした");
+    return JSON.parse(m[0]);
+  }
+}
+
+function normalizeGeneratedQuiz(raw, quizType) {
+  const question = String(raw?.question || "").trim().slice(0, 500);
+  const answer = String(raw?.answer || "").trim().slice(0, 200);
+  const explanation = raw?.explanation == null ? null : String(raw.explanation).trim().slice(0, 1000);
+  if (!question || !answer) return null;
+
+  if (quizType === "multiple_choice") {
+    const choices = [raw?.choice_1, raw?.choice_2, raw?.choice_3, raw?.choice_4]
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    if (choices.length !== 4) return null;
+    if (!choices.includes(answer)) return null;
+    if (new Set(choices).size !== 4) return null;
+
+    return {
+      type: quizType,
+      question,
+      answer,
+      explanation,
+      source_line: null,
+      choice_1: choices[0],
+      choice_2: choices[1],
+      choice_3: choices[2],
+      choice_4: choices[3],
+    };
+  }
+
+  if (quizType === "true_false" && !["○", "×"].includes(answer)) {
+    return null;
+  }
+
+  if (quizType === "fill_blank") {
+    const hasBlankMarker = /_{3,}/.test(question) || /（[　\s]+）/.test(question) || /\([　\s]+\)/.test(question);
+    if (!hasBlankMarker) return null;
+  }
+
+  return {
+    type: quizType,
+    question,
+    answer,
+    explanation,
+    source_line: null,
+    choice_1: null,
+    choice_2: null,
+    choice_3: null,
+    choice_4: null,
   };
 }
 
@@ -176,11 +240,66 @@ async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = 
     distribution: summarizeAnswerPositionDistribution(balancedQuizzes),
   });
 
-  return balancedQuizzes.map(formatQuizForStorage);
+  return balancedQuizzes.map(formatMultipleChoiceQuizForStorage);
+}
+
+async function generateTypedQuizzes({ openai, note, quizType, targetCount = 10 }) {
+  if (!SUPPORTED_QUIZ_TYPES.includes(quizType)) {
+    throw new Error(`unsupported quiz type: ${quizType}`);
+  }
+
+  if (quizType === "multiple_choice") {
+    return generateQuizzesWithQualityPipeline({ openai, note, targetCount, logger: console });
+  }
+
+  const rawText = String(note?.body_raw || "");
+  const { cleanedText } = cleanNoteText(rawText);
+  const typeInstructionMap = {
+    written: "一問一答（記述）形式で作成してください。解答は簡潔な語句・文にしてください。",
+    true_false: "○×問題を作成してください。answer は必ず '○' または '×' にしてください。",
+    fill_blank: "穴埋め問題を作成してください。question には必ず（　　　）または ___ の空欄を含めてください。",
+  };
+
+  const prompt = [
+    "以下の講義ノートに基づき、指定形式のクイズをJSONで作成してください。",
+    "- 推測を避け、本文の事実に基づくこと",
+    "- 各問題は重複しないこと",
+    "- 出力はJSONのみ",
+    `- 問題数: ${targetCount}`,
+    `- 形式: ${quizType}`,
+    `- 追加要件: ${typeInstructionMap[quizType] || ""}`,
+    "",
+    "出力形式:",
+    '{"quizzes":[{"question":"...","answer":"...","explanation":"..."}]}',
+    "",
+    "講義ノート本文:",
+    cleanedText,
+  ].join("\n");
+
+  const resp = await openai.chat.completions.create({
+    model: DEFAULT_MODEL,
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: "あなたは講義ノートの復習問題作成者です。JSONのみ返答してください。" },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  const text = resp.choices?.[0]?.message?.content || "{}";
+  const parsed = extractJsonBlock(text);
+  const quizzes = Array.isArray(parsed?.quizzes) ? parsed.quizzes : [];
+
+  return quizzes
+    .map((q) => normalizeGeneratedQuiz(q, quizType))
+    .filter(Boolean)
+    .slice(0, targetCount);
 }
 
 module.exports = {
   generateQuizzesWithQualityPipeline,
+  generateTypedQuizzes,
+  SUPPORTED_QUIZ_TYPES,
   buildBalancedAnswerIndices,
   rebalanceQuizAnswerPositions,
   summarizeAnswerPositionDistribution,

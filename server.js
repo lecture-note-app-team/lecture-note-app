@@ -41,7 +41,7 @@ const session = require("express-session");
 const MySQLStore = require("express-mysql-session")(session);
 const bcrypt = require("bcrypt");
 const OpenAI = require("openai");
-const { generateQuizzesWithQualityPipeline } = require("./services/quizGenerator");
+const { generateTypedQuizzes, SUPPORTED_QUIZ_TYPES } = require("./services/quizGenerator");
 
 // ---------- OpenAI ----------
 function getOpenAIClient() {
@@ -340,7 +340,7 @@ function validateUserQuizPayload(payload = {}) {
     errors.push("解説は1000文字以内で入力してください");
   }
 
-  if (!["multiple_choice", "written", "true_false", "fill_blank"].includes(normalized.quiz_type)) {
+  if (!SUPPORTED_QUIZ_TYPES.includes(normalized.quiz_type)) {
     errors.push("quiz_type は multiple_choice / written / true_false / fill_blank のいずれかを指定してください");
   }
 
@@ -532,11 +532,12 @@ ${body}
 
 async function generateQuizzesForNote(note, options = {}) {
   const openai = getOpenAIClient();
-  return generateQuizzesWithQualityPipeline({
+  const requestedType = String(options.quizType || "multiple_choice").trim();
+  return generateTypedQuizzes({
     openai,
     note,
+    quizType: SUPPORTED_QUIZ_TYPES.includes(requestedType) ? requestedType : "multiple_choice",
     targetCount: options.limit || 10,
-    logger: console,
   });
 }
 
@@ -2402,13 +2403,22 @@ const handleGenerateQuiz = [
       });
     }
 
+    // 手動作成と同じ quiz_type を自動生成でも利用する
+    const requestedQuizType = String(req.body?.quiz_type || "multiple_choice").trim();
+    if (!SUPPORTED_QUIZ_TYPES.includes(requestedQuizType)) {
+      return res.status(400).json({
+        message: "quiz_type は multiple_choice / written / true_false / fill_blank のいずれかを指定してください",
+      });
+    }
+
     let quizzes = [];
     try {
-      quizzes = await generateQuizzesForNote(note, { limit: 10 });
+      quizzes = await generateQuizzesForNote(note, { limit: 10, quizType: requestedQuizType });
     } catch (err) {
       console.error("quiz_pipeline_failed", {
         noteId,
         userId,
+        quizType: requestedQuizType,
         message: err.message,
         details: err.details || null,
       });
@@ -2418,11 +2428,31 @@ const handleGenerateQuiz = [
       });
     }
 
+    if (!quizzes.length) {
+      return res.status(422).json({
+        message: "クイズを生成できませんでした。ノート内容を調整して再実行してください。",
+      });
+    }
+
+    const generatedVisibility = note.community_id || note.visibility === "public" ? "community" : "private";
+
     for (const q of quizzes) {
       await pool.query(
-        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, source_line)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [userId, noteId, q.type, q.question, q.answer, q.source_line]
+        `INSERT INTO note_quizzes (user_id, note_id, type, question, answer, source_line, visibility, choice_1, choice_2, choice_3, choice_4)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          noteId,
+          q.type,
+          q.question,
+          q.answer,
+          q.source_line,
+          generatedVisibility,
+          q.choice_1 || null,
+          q.choice_2 || null,
+          q.choice_3 || null,
+          q.choice_4 || null,
+        ]
       );
     }
 

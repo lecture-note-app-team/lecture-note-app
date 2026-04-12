@@ -43,11 +43,23 @@
 
   <div class="card">
     <h2>自分のノート</h2>
+    <div class="calendar-filter-row">
+      <label for="myDateFilter">作成日で絞り込み</label>
+      <input id="myDateFilter" type="date" />
+      <button id="btnClearMyDate" type="button">日付解除</button>
+      <div id="mySelectedDate" class="selected-date-indicator">日付未選択（全件表示）</div>
+    </div>
     <div id="myList"></div>
   </div>
 
   <div class="card">
     <h2>コミュニティ内ノート</h2>
+    <div class="calendar-filter-row">
+      <label for="communityDateFilter">作成日で絞り込み</label>
+      <input id="communityDateFilter" type="date" />
+      <button id="btnClearCommunityDate" type="button">日付解除</button>
+      <div id="communitySelectedDate" class="selected-date-indicator">日付未選択（全件表示）</div>
+    </div>
     <div id="communityList">読み込み中…</div>
   </div>
 
@@ -67,6 +79,6 @@
     <div id="joinRequestApprovals"></div>
   </div>
 
-  <script src="./mypage.js?v=2"></script>
+  <script src="./mypage.js?v=3"></script>
 </body>
 </html>

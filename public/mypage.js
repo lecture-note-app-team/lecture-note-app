@@ -48,6 +48,33 @@ function toggleButtonText(v) {
   return v === "private" ? "公開にする" : "非公開にする";
 }
 
+function toLocalDateKey(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDateLabel(value) {
+  if (!value) return "日付未選択（全件表示）";
+  const d = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "日付未選択（全件表示）";
+  return d.toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+}
+
+function applyDateFilter(rows, selectedDate) {
+  if (!selectedDate) return rows;
+  return rows.filter((row) => toLocalDateKey(row.created_at) === selectedDate);
+}
+
 function setButtonLoading(btn, loading, loadingText = "処理中…") {
   if (!btn) return;
   if (loading) {
@@ -209,72 +236,156 @@ async function handleExportPdf(noteId, messageEl, triggerBtn) {
   }
 }
 
-async function loadMyNotes() {
+function quizTypeLabel(type) {
+  if (type === "multiple_choice") return "選択式";
+  if (type === "written") return "記述式";
+  if (type === "true_false") return "○×";
+  if (type === "fill_blank") return "穴埋め";
+  return "その他";
+}
+
+const myPageState = {
+  mySelectedDate: "",
+  myNotes: [],
+  myQuizzes: [],
+  communitySelectedDate: "",
+  communityNotes: [],
+};
+
+function updateSelectedDateIndicator(targetId, selectedDate) {
+  const el = $(targetId);
+  if (!el) return;
+  const label = formatDateLabel(selectedDate);
+  el.textContent = selectedDate ? `選択中: ${label}` : label;
+  el.classList.toggle("is-active", Boolean(selectedDate));
+}
+
+function renderMyNotesAndQuizzes() {
   const listEl = $("myList");
-  listEl.innerHTML = "読み込み中…";
+  if (!listEl) return;
 
-  try {
-    const rows = await api("/api/my-notes");
+  const filteredNotes = applyDateFilter(myPageState.myNotes, myPageState.mySelectedDate);
+  const filteredQuizzes = applyDateFilter(myPageState.myQuizzes, myPageState.mySelectedDate);
+  const noteMap = new Map(filteredNotes.map((n) => [String(n.id), n]));
+  updateSelectedDateIndicator("mySelectedDate", myPageState.mySelectedDate);
 
-    if (!Array.isArray(rows) || rows.length === 0) {
-      listEl.textContent = "（まだ投稿がありません）";
-      return;
-    }
-
-    listEl.innerHTML = "";
-
-    for (const n of rows) {
-      const div = document.createElement("div");
-      div.className = "card";
-
-      const tag = visibilityLabel(n.visibility);
-      const author = n.author_name ? ` / 投稿名：${escapeHtml(n.author_name)}` : "";
-      const comm = n.community_id ? ` <span style="font-size:12px; color:#666;">🏠コミュID:${n.community_id}</span>` : "";
-
-      div.innerHTML = `
+  const notesHtml = filteredNotes.map((n) => {
+    const tag = visibilityLabel(n.visibility);
+    const author = n.author_name ? ` / 投稿名：${escapeHtml(n.author_name)}` : "";
+    const comm = n.community_id ? ` <span style="font-size:12px; color:#666;">🏠コミュID:${n.community_id}</span>` : "";
+    return `
+      <div class="card">
         <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
           <strong>${escapeHtml(n.title)}</strong>
           <span style="font-size:12px; color:#666;">${tag}</span>
           ${comm}
         </div>
         <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
+        <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
         <div class="small" style="margin-top:6px;">追加機能: クイズ生成（無料枠あり） / AI要約（無料枠あり） / PDF出力（Pro）</div>
         <div class="row" style="margin-top:8px;">
-          <button class="btnOpen">開く</button>
-          <button class="btnToggle">${toggleButtonText(n.visibility)}</button>
-          <button class="btnDelete">削除</button>
-          <button class="btnGenerateQuiz">クイズ生成</button>
-          <button class="btnAiSummary">AI要約</button>
-          <button class="btnExportPdf">PDF出力</button>
+          <button class="btnOpen" data-note-open="${n.id}">開く</button>
+          <button class="btnToggle" data-note-toggle="${n.id}">${toggleButtonText(n.visibility)}</button>
+          <button class="btnDelete" data-note-delete="${n.id}">削除</button>
+          <button class="btnGenerateQuiz" data-note-generate="${n.id}">クイズ生成</button>
+          <button class="btnAiSummary" data-note-summary="${n.id}">AI要約</button>
+          <button class="btnExportPdf" data-note-pdf="${n.id}">PDF出力</button>
         </div>
         <div class="note-action-message" style="margin-top:8px;"></div>
-      `;
+      </div>
+    `;
+  }).join("");
 
-      const msgEl = div.querySelector(".note-action-message");
-      const btnGenerate = div.querySelector(".btnGenerateQuiz");
-      const btnSummary = div.querySelector(".btnAiSummary");
-      const btnPdf = div.querySelector(".btnExportPdf");
+  const quizHtml = filteredQuizzes.map((q) => `
+    <div class="card">
+      <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+        <strong>${escapeHtml(q.title || `ノートクイズ #${q.id}`)}</strong>
+        <span style="font-size:12px; color:#666;">${quizTypeLabel(q.quiz_type)}</span>
+      </div>
+      <div>${escapeHtml(q.question_text || "問題文なし")}</div>
+      <div class="small">作成日時: ${new Date(q.created_at).toLocaleString("ja-JP")}</div>
+      <div class="row" style="margin-top:8px;">
+        <a class="button-link" href="/my-quizzes.html">クイズ一覧で確認</a>
+      </div>
+    </div>
+  `).join("");
 
-      div.querySelector(".btnOpen").addEventListener("click", () => {
-        location.href = "/note_detail.html?id=" + n.id;
-      });
+  const noteEmpty = myPageState.mySelectedDate
+    ? "この日に作成されたノートはありません。"
+    : "表示できるノートはありません。";
+  const quizEmpty = myPageState.mySelectedDate
+    ? "この日に作成されたクイズはありません。"
+    : "表示できるクイズはありません。";
 
-      div.querySelector(".btnToggle").addEventListener("click", () => {
-        changeVisibility(n.id, n.visibility, n.title);
-      });
+  listEl.innerHTML = `
+    <div class="content-split">
+      <section>
+        <h3>ノート</h3>
+        ${notesHtml || `<div class="small">${noteEmpty}</div>`}
+      </section>
+      <section>
+        <h3>クイズ</h3>
+        ${quizHtml || `<div class="small">${quizEmpty}</div>`}
+      </section>
+    </div>
+  `;
 
-      div.querySelector(".btnDelete").addEventListener("click", () => {
-        deleteNote(n.id, n.title);
-      });
+  listEl.querySelectorAll("[data-note-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      location.href = "/note_detail.html?id=" + btn.dataset.noteOpen;
+    });
+  });
+  listEl.querySelectorAll("[data-note-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const note = noteMap.get(btn.dataset.noteToggle || "");
+      if (!note) return;
+      changeVisibility(Number(note.id), note.visibility, note.title || "");
+    });
+  });
+  listEl.querySelectorAll("[data-note-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const note = noteMap.get(btn.dataset.noteDelete || "");
+      if (!note) return;
+      deleteNote(Number(note.id), note.title || "");
+    });
+  });
+  listEl.querySelectorAll("[data-note-generate]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const noteCard = btn.closest(".card");
+      const msgEl = noteCard?.querySelector(".note-action-message");
+      handleGenerateQuiz(Number(btn.dataset.noteGenerate), msgEl, btn);
+    });
+  });
+  listEl.querySelectorAll("[data-note-summary]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const noteCard = btn.closest(".card");
+      const msgEl = noteCard?.querySelector(".note-action-message");
+      handleAiSummary(Number(btn.dataset.noteSummary), msgEl, btn);
+    });
+  });
+  listEl.querySelectorAll("[data-note-pdf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const noteCard = btn.closest(".card");
+      const msgEl = noteCard?.querySelector(".note-action-message");
+      handleExportPdf(Number(btn.dataset.notePdf), msgEl, btn);
+    });
+  });
+}
 
-      btnGenerate.addEventListener("click", () => handleGenerateQuiz(n.id, msgEl, btnGenerate));
-      btnSummary.addEventListener("click", () => handleAiSummary(n.id, msgEl, btnSummary));
-      btnPdf.addEventListener("click", () => handleExportPdf(n.id, msgEl, btnPdf));
+async function loadMyNotes() {
+  const listEl = $("myList");
+  if (listEl) listEl.innerHTML = "読み込み中…";
 
-      listEl.appendChild(div);
-    }
+  try {
+    const [noteRows, myQuizData] = await Promise.all([
+      api("/api/my-notes"),
+      api("/api/quizzes/mine"),
+    ]);
+    myPageState.myNotes = Array.isArray(noteRows) ? noteRows : [];
+    myPageState.myQuizzes = Array.isArray(myQuizData?.data?.quizzes) ? myQuizData.data.quizzes : [];
+    renderMyNotesAndQuizzes();
   } catch (e) {
-    listEl.innerHTML = `取得失敗: ${escapeHtml(e.message)}<br><a href="/login.html">ログイン</a>`;
+    if (listEl) listEl.innerHTML = `取得失敗: ${escapeHtml(e.message)}<br><a href="/login.html">ログイン</a>`;
   }
 }
 
@@ -433,40 +544,53 @@ async function loadCommunityNotes() {
   try {
     const rows = await api("/api/community-notes");
 
-    if (!Array.isArray(rows) || rows.length === 0) {
-      el.textContent = "（参加中コミュのノートはまだありません）";
-      return;
-    }
+    myPageState.communityNotes = Array.isArray(rows) ? rows : [];
+    renderCommunityNotes();
+  } catch (e) {
+    el.innerHTML = `取得失敗: ${escapeHtml(e.message)}`;
+  }
+}
 
-    el.innerHTML = "";
+function renderCommunityNotes() {
+  const el = $("communityList");
+  if (!el) return;
 
-    for (const n of rows) {
-      const div = document.createElement("div");
-      div.className = "card";
+  const filteredRows = applyDateFilter(myPageState.communityNotes, myPageState.communitySelectedDate);
+  updateSelectedDateIndicator("communitySelectedDate", myPageState.communitySelectedDate);
 
-      const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
-      const cname = n.community_name ? `🏷 ${escapeHtml(n.community_name)}` : `🏷 community:${n.community_id}`;
+  if (!myPageState.communityNotes.length) {
+    el.innerHTML = `<div class="small">（参加中コミュのノートはまだありません）</div>`;
+    return;
+  }
 
-      div.innerHTML = `
+  if (!filteredRows.length) {
+    el.innerHTML = `<div class="small">この日に作成されたノートはありません。</div>`;
+    return;
+  }
+
+  el.innerHTML = filteredRows.map((n) => {
+    const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
+    const cname = n.community_name ? `🏷 ${escapeHtml(n.community_name)}` : `🏷 community:${n.community_id}`;
+    return `
+      <div class="card">
         <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
           <strong>${escapeHtml(n.title)}</strong>
           <span style="font-size:12px; color:#666;">${cname}</span>
         </div>
         <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
+        <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
         <div class="row" style="margin-top:8px;">
-          <button class="btnOpen">開く</button>
+          <button class="btnOpen" data-community-open="${n.id}">開く</button>
         </div>
-      `;
+      </div>
+    `;
+  }).join("");
 
-      div.querySelector(".btnOpen").addEventListener("click", () => {
-        location.href = "/note_detail.html?id=" + n.id + "&from=" + encodeURIComponent("/mypage.html");
-      });
-
-      el.appendChild(div);
-    }
-  } catch (e) {
-    el.innerHTML = `取得失敗: ${escapeHtml(e.message)}`;
-  }
+  el.querySelectorAll("[data-community-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      location.href = "/note_detail.html?id=" + btn.dataset.communityOpen + "&from=" + encodeURIComponent("/mypage.html");
+    });
+  });
 }
 
 async function loadCommunitiesOnMyPage() {
@@ -640,6 +764,24 @@ async function initMyPage() {
   });
   $("btnCancelSubscription")?.addEventListener("click", (e) => {
     handleCancelSubscription(e.currentTarget);
+  });
+  $("myDateFilter")?.addEventListener("change", (e) => {
+    myPageState.mySelectedDate = e.currentTarget.value || "";
+    renderMyNotesAndQuizzes();
+  });
+  $("communityDateFilter")?.addEventListener("change", (e) => {
+    myPageState.communitySelectedDate = e.currentTarget.value || "";
+    renderCommunityNotes();
+  });
+  $("btnClearMyDate")?.addEventListener("click", () => {
+    myPageState.mySelectedDate = "";
+    if ($("myDateFilter")) $("myDateFilter").value = "";
+    renderMyNotesAndQuizzes();
+  });
+  $("btnClearCommunityDate")?.addEventListener("click", () => {
+    myPageState.communitySelectedDate = "";
+    if ($("communityDateFilter")) $("communityDateFilter").value = "";
+    renderCommunityNotes();
   });
 
   await Promise.all([

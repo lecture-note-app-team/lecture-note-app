@@ -281,6 +281,45 @@ pre{
   margin: 12px 0;
 }
 
+.calendar-filter-row{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.calendar-filter-row label{
+  margin: 0;
+  min-width: 120px;
+}
+
+.calendar-filter-row input[type="date"]{
+  width: auto;
+  min-width: 180px;
+}
+
+.selected-date-indicator{
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.66);
+}
+
+.selected-date-indicator.is-active{
+  color: #1d4ed8;
+  border-color: rgba(59,130,246,0.4);
+  background: rgba(59,130,246,0.08);
+}
+
+.content-split{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 /* top link style */
 body > a{
   display: inline-block;
@@ -352,6 +391,19 @@ body > a{
 
 @media (max-width: 700px){
   .billing-grid{ grid-template-columns: 1fr; }
+  .calendar-filter-row{
+    align-items: stretch;
+  }
+  .calendar-filter-row label{
+    width: 100%;
+  }
+  .calendar-filter-row input[type="date"],
+  .calendar-filter-row button{
+    width: 100%;
+  }
+  .content-split{
+    grid-template-columns: 1fr;
+  }
 }
 
 .quiz-filter-row > select,

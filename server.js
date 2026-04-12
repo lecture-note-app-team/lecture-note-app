@@ -55,6 +55,26 @@ const app = express();
 
 const StripeLib = process.env.STRIPE_SECRET_KEY ? require("stripe") : null;
 const stripe = StripeLib ? new StripeLib(process.env.STRIPE_SECRET_KEY) : null;
+const jstDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function toJstDateKey(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return jstDateFormatter.format(date);
+}
+
+function attachJstDateKey(rows, sourceField = "created_at", targetField = "created_date_jst") {
+  return rows.map((row) => ({
+    ...row,
+    [targetField]: toJstDateKey(row[sourceField]),
+  }));
+}
 
 // Railwayなどプロキシ配下
 if (process.env.NODE_ENV === "production") {
@@ -919,7 +939,7 @@ app.get("/api/notes", wrap(async (req, res) => {
     );
   }
 
-  res.json(rows);
+  res.json(attachJstDateKey(rows));
 }));
 
 // 自分が所属しているコミュニティ内のノート一覧（ログイン必須）
@@ -949,7 +969,7 @@ app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
     [ids]
   );
 
-  res.json(rows);
+  res.json(attachJstDateKey(rows));
 }));
 
 // 詳細：閲覧権限に従う（community or private）
@@ -1105,7 +1125,7 @@ app.get("/api/my-notes", requireLogin, wrap(async (req, res) => {
     [userId]
   );
 
-  res.json(rows);
+  res.json(attachJstDateKey(rows));
 }));
 
 // 自分のノート削除（ログイン必須・本人のみ）
@@ -2564,39 +2584,48 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
   const choiceSelect = await buildNoteQuizSelectChoiceFragments();
 
   let sql = `
-    SELECT id,
-           user_id,
-           note_id,
-           CONCAT('ノートクイズ #', id) AS title,
-           question AS question_text,
-           type AS quiz_type,
+    SELECT nq.id,
+           nq.user_id,
+           nq.note_id,
+           CONCAT('ノートクイズ #', nq.id) AS title,
+           nq.question AS question_text,
+           nq.type AS quiz_type,
            ${choiceSelect.choice1},
            ${choiceSelect.choice2},
            ${choiceSelect.choice3},
            ${choiceSelect.choice4},
            ${choiceSelect.choices},
            ${choiceSelect.options},
-           answer AS correct_answer,
+           nq.answer AS correct_answer,
            NULL AS explanation,
-           COALESCE(visibility, 'private') AS visibility,
-           created_at,
-           updated_at
-      FROM note_quizzes
-     WHERE user_id = ?`;
+           COALESCE(nq.visibility, 'private') AS visibility,
+           nq.created_at,
+           nq.updated_at,
+           n.created_at AS note_created_at
+      FROM note_quizzes nq
+      LEFT JOIN notes n ON n.id = nq.note_id
+     WHERE nq.user_id = ?`;
   const params = [userId];
 
   if (noteId) {
-    sql += " AND note_id = ?";
+    sql += " AND nq.note_id = ?";
     params.push(noteId);
   }
   if (quizType) {
-    sql += " AND type = ?";
+    sql += " AND nq.type = ?";
     params.push(quizType);
   }
-  sql += " ORDER BY created_at DESC, id DESC";
+  sql += " ORDER BY nq.created_at DESC, nq.id DESC";
 
   const [rows] = await pool.query(sql, params);
-  const normalizedRows = rows.map(normalizeQuizChoices);
+  const normalizedRows = rows.map((row) => {
+    const normalized = normalizeQuizChoices(row);
+    return {
+      ...normalized,
+      created_date_jst: toJstDateKey(normalized.created_at),
+      note_created_date_jst: toJstDateKey(normalized.note_created_at),
+    };
+  });
   res.json({ success: true, data: { quizzes: normalizedRows } });
 }));
 

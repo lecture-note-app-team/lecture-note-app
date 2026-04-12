@@ -72,7 +72,10 @@ function formatDateLabel(value) {
 
 function applyDateFilter(rows, selectedDate) {
   if (!selectedDate) return rows;
-  return rows.filter((row) => toLocalDateKey(row.created_at) === selectedDate);
+  return rows.filter((row) => {
+    if (row.created_date_jst) return row.created_date_jst === selectedDate;
+    return toLocalDateKey(row.created_at) === selectedDate;
+  });
 }
 
 function setButtonLoading(btn, loading, loadingText = "処理中…") {
@@ -265,7 +268,10 @@ function renderMyNotesAndQuizzes() {
   if (!listEl) return;
 
   const filteredNotes = applyDateFilter(myPageState.myNotes, myPageState.mySelectedDate);
-  const filteredQuizzes = applyDateFilter(myPageState.myQuizzes, myPageState.mySelectedDate);
+  const filteredNoteIds = new Set(filteredNotes.map((note) => Number(note.id)));
+  const filteredQuizzes = myPageState.mySelectedDate
+    ? myPageState.myQuizzes.filter((quiz) => filteredNoteIds.has(Number(quiz.note_id)))
+    : myPageState.myQuizzes;
   const noteMap = new Map(filteredNotes.map((n) => [String(n.id), n]));
   updateSelectedDateIndicator("mySelectedDate", myPageState.mySelectedDate);
 
@@ -314,7 +320,7 @@ function renderMyNotesAndQuizzes() {
     ? "この日に作成されたノートはありません。"
     : "表示できるノートはありません。";
   const quizEmpty = myPageState.mySelectedDate
-    ? "この日に作成されたクイズはありません。"
+    ? "この日に作成されたノートに紐づくクイズはありません。"
     : "表示できるクイズはありません。";
 
   listEl.innerHTML = `
@@ -568,21 +574,36 @@ function renderCommunityNotes() {
     return;
   }
 
-  el.innerHTML = filteredRows.map((n) => {
-    const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
-    const cname = n.community_name ? `🏷 ${escapeHtml(n.community_name)}` : `🏷 community:${n.community_id}`;
+  const rowsByCommunity = new Map();
+  for (const row of filteredRows) {
+    const key = row.community_name || `community:${row.community_id}`;
+    const items = rowsByCommunity.get(key) || [];
+    items.push(row);
+    rowsByCommunity.set(key, items);
+  }
+
+  el.innerHTML = Array.from(rowsByCommunity.entries()).map(([communityLabel, notes]) => {
+    const cards = notes.map((n) => {
+      const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
+      return `
+        <div class="card">
+          <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+            <strong>${escapeHtml(n.title)}</strong>
+          </div>
+          <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
+          <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
+          <div class="row" style="margin-top:8px;">
+            <button class="btnOpen" data-community-open="${n.id}">開く</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
     return `
-      <div class="card">
-        <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
-          <strong>${escapeHtml(n.title)}</strong>
-          <span style="font-size:12px; color:#666;">${cname}</span>
-        </div>
-        <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
-        <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
-        <div class="row" style="margin-top:8px;">
-          <button class="btnOpen" data-community-open="${n.id}">開く</button>
-        </div>
-      </div>
+      <section style="margin-bottom:12px;">
+        <h3 style="margin:0 0 8px;">🏷 ${escapeHtml(communityLabel)}</h3>
+        ${cards}
+      </section>
     `;
   }).join("");
 

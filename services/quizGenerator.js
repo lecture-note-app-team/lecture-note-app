@@ -79,7 +79,7 @@ function formatQuizForStorage(quiz) {
     choice_2: quiz.choice_2 || null,
     choice_3: quiz.choice_3 || null,
     choice_4: quiz.choice_4 || null,
-    source_line: null,
+    source_line: quiz.sourceQuote || null,
   };
 }
 

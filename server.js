@@ -552,12 +552,14 @@ ${body}
 
 async function generateQuizzesForNote(note, options = {}) {
   const openai = getOpenAIClient();
+  const noteWithQuizType = {
+    ...note,
+    requested_quiz_type: options.quizType || "auto",
+  };
+
   return generateQuizzesWithQualityPipeline({
     openai,
-    note: {
-      ...note,
-      requested_quiz_type: options.quizType || "auto",
-    },
+    note: noteWithQuizType,
     targetCount: options.limit || 10,
     logger: console,
   });

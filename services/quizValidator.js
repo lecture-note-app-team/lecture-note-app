@@ -29,6 +29,9 @@ function parseAndValidateQuizResponse(raw) {
     choice_4: String(q.choice_4 || "").trim(),
     reason: String(q.reason || "").trim(),
     sourceQuote: String(q.sourceQuote || "").trim(),
+    answerIndex: q.answerIndex == null && q.answer_index == null
+      ? null
+      : Number(q.answerIndex ?? q.answer_index),
   }));
 }
 
@@ -68,6 +71,17 @@ function filterLowQualityQuizzes(quizzes, noteText) {
       if (!choices.includes(q.correct_answer)) {
         reasons.push({ question: q.question, reason: "correct_not_in_choices" });
         continue;
+      }
+
+      if (q.answerIndex != null) {
+        if (!Number.isInteger(q.answerIndex) || q.answerIndex < 0 || q.answerIndex > 3) {
+          reasons.push({ question: q.question, reason: "invalid_answer_index" });
+          continue;
+        }
+        if (choices[q.answerIndex] !== q.correct_answer) {
+          reasons.push({ question: q.question, reason: "answer_index_mismatch" });
+          continue;
+        }
       }
     }
 

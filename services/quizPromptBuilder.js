@@ -22,7 +22,7 @@ function resolveQuizTypeGuide(requestedQuizType) {
     return "選択形式: true_false（○×）のみで作成すること。";
   }
   if (normalized === "fill_blank") {
-    return "選択形式: fill_blank（少数/穴埋め）のみで作成すること。";
+    return "選択形式: fill_blank（穴埋め）のみで作成すること。";
   }
   return "選択形式: auto（おまかせ）。各問題ごとに multiple_choice / written / true_false / fill_blank の最適な1形式を選ぶこと。";
 }

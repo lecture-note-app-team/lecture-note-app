@@ -301,7 +301,7 @@ function renderMyNotesAndQuizzes() {
             <option value="multiple_choice">4択</option>
             <option value="written">一問一答</option>
             <option value="true_false">○×</option>
-            <option value="fill_blank">少数（穴埋め）</option>
+            <option value="fill_blank">穴埋め</option>
           </select>
           <button class="btnGenerateQuiz" data-note-generate="${n.id}">クイズ生成</button>
           <button class="btnAiSummary" data-note-summary="${n.id}">AI要約</button>

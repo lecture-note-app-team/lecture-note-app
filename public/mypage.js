@@ -48,36 +48,6 @@ function toggleButtonText(v) {
   return v === "private" ? "公開にする" : "非公開にする";
 }
 
-function toLocalDateKey(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function formatDateLabel(value) {
-  if (!value) return "日付未選択（全件表示）";
-  const d = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return "日付未選択（全件表示）";
-  return d.toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  });
-}
-
-function applyDateFilter(rows, selectedDate) {
-  if (!selectedDate) return rows;
-  return rows.filter((row) => {
-    if (row.created_date_jst) return row.created_date_jst === selectedDate;
-    return toLocalDateKey(row.created_at) === selectedDate;
-  });
-}
-
 function setButtonLoading(btn, loading, loadingText = "処理中…") {
   if (!btn) return;
   if (loading) {
@@ -310,6 +280,17 @@ function setDaySummary(targetId, message) {
   if (el) el.textContent = message || "";
 }
 
+function debounce(fn, waitMs = 300) {
+  let timer = null;
+  return (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, waitMs);
+  };
+}
+
 function buildUrl(path, params = {}) {
   const sp = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {
@@ -415,7 +396,7 @@ function renderMyNotesAndQuizzes() {
     </div>
   `).join("");
 
-  const targetLabel = myPageState.mySelectedDate ? `対象日: ${myPageState.mySelectedDate}` : "対象日: すべての日付";
+  const targetLabel = formatDateLabel(myPageState.mySelectedDate);
   const summary = `${targetLabel} / ノート ${myPageState.myNotes.length}件・クイズ ${myPageState.myQuizzes.length}件`;
   setDaySummary("myDayCountSummary", summary);
 
@@ -539,7 +520,7 @@ function renderCommunityNotes() {
   if (!el) return;
   updateSelectedDateIndicator("communitySelectedDate", myPageState.communitySelectedDate);
 
-  const targetLabel = myPageState.communitySelectedDate ? `対象日: ${myPageState.communitySelectedDate}` : "対象日: すべての日付";
+  const targetLabel = formatDateLabel(myPageState.communitySelectedDate);
   setDaySummary("communityDayCountSummary", `${targetLabel} / ${myPageState.communityNotes.length}件`);
 
   if (!myPageState.communityNotes.length) {
@@ -776,79 +757,6 @@ async function handleCancelSubscription(button) {
   }
 }
 
-async function loadCommunityNotes() {
-  const el = document.getElementById("communityList");
-  if (!el) return;
-
-  el.textContent = "読み込み中…";
-
-  try {
-    const rows = await api("/api/community-notes");
-
-    myPageState.communityNotes = Array.isArray(rows) ? rows : [];
-    renderCommunityNotes();
-  } catch (e) {
-    el.innerHTML = `取得失敗: ${escapeHtml(e.message)}`;
-  }
-}
-
-function renderCommunityNotes() {
-  const el = $("communityList");
-  if (!el) return;
-
-  const filteredRows = applyDateFilter(myPageState.communityNotes, myPageState.communitySelectedDate);
-  updateSelectedDateIndicator("communitySelectedDate", myPageState.communitySelectedDate);
-
-  if (!myPageState.communityNotes.length) {
-    el.innerHTML = `<div class="small">（参加中コミュのノートはまだありません）</div>`;
-    return;
-  }
-
-  if (!filteredRows.length) {
-    el.innerHTML = `<div class="small">この日に作成されたノートはありません。</div>`;
-    return;
-  }
-
-  const rowsByCommunity = new Map();
-  for (const row of filteredRows) {
-    const key = row.community_name || `community:${row.community_id}`;
-    const items = rowsByCommunity.get(key) || [];
-    items.push(row);
-    rowsByCommunity.set(key, items);
-  }
-
-  el.innerHTML = Array.from(rowsByCommunity.entries()).map(([communityLabel, notes]) => {
-    const cards = notes.map((n) => {
-      const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
-      return `
-        <div class="card">
-          <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
-            <strong>${escapeHtml(n.title)}</strong>
-          </div>
-          <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
-          <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
-          <div class="row" style="margin-top:8px;">
-            <button class="btnOpen" data-community-open="${n.id}">開く</button>
-          </div>
-        </div>
-      `;
-    }).join("");
-
-    return `
-      <section style="margin-bottom:12px;">
-        <h3 style="margin:0 0 8px;">🏷 ${escapeHtml(communityLabel)}</h3>
-        ${cards}
-      </section>
-    `;
-  }).join("");
-
-  el.querySelectorAll("[data-community-open]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      location.href = "/note_detail.html?id=" + btn.dataset.communityOpen + "&from=" + encodeURIComponent("/mypage.html");
-    });
-  });
-}
-
 async function loadCommunitiesOnMyPage() {
   const ul = $("communitiesList");
   if (!ul) return;
@@ -1006,6 +914,12 @@ document.addEventListener("click", async (e) => {
 async function initMyPage() {
   const me = await loadMe();
   if (!me) return;
+  const loadMyNotesDebounced = debounce(() => {
+    loadMyNotes();
+  }, 300);
+  const loadCommunityNotesDebounced = debounce(() => {
+    loadCommunityNotes();
+  }, 300);
 
   $("btnLogout")?.addEventListener("click", logout);
   $("btnDeleteAccount")?.addEventListener("click", () => deleteAccount(me.username));
@@ -1039,7 +953,7 @@ async function initMyPage() {
   });
   $("mySearchInput")?.addEventListener("input", (e) => {
     myPageState.mySearch = (e.currentTarget.value || "").trim();
-    loadMyNotes();
+    loadMyNotesDebounced();
   });
   $("mySortSelect")?.addEventListener("change", (e) => {
     myPageState.mySort = e.currentTarget.value || "desc";
@@ -1047,7 +961,7 @@ async function initMyPage() {
   });
   $("communitySearchInput")?.addEventListener("input", (e) => {
     myPageState.communitySearch = (e.currentTarget.value || "").trim();
-    loadCommunityNotes();
+    loadCommunityNotesDebounced();
   });
   $("communitySortSelect")?.addEventListener("change", (e) => {
     myPageState.communitySort = e.currentTarget.value || "desc";

@@ -985,8 +985,9 @@ app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
         c.name AS community_name
      FROM notes n
      JOIN communities c ON c.id = n.community_id
-     WHERE n.community_id IN (?)`;
-  const params = [ids];
+     WHERE n.community_id IN (?)
+       AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)`;
+  const params = [ids, userId];
   if (date) {
     sql += " AND DATE(CONVERT_TZ(n.created_at, '+00:00', '+09:00')) = ?";
     params.push(date);
@@ -1019,10 +1020,11 @@ app.get("/api/community-notes/calendar-summary", requireLogin, wrap(async (req, 
             COUNT(*) AS count
        FROM notes n
       WHERE n.community_id IN (?)
+        AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)
         AND DATE_FORMAT(CONVERT_TZ(n.created_at, '+00:00', '+09:00'), '%Y-%m') = ?
       GROUP BY date
       ORDER BY date ASC`,
-    [ids, month]
+    [ids, userId, month]
   );
   res.json({ month, days: rows });
 }));
@@ -1062,8 +1064,9 @@ app.get("/api/community-quizzes", requireLogin, wrap(async (req, res) => {
                FROM note_quizzes nq
                JOIN notes n ON n.id = nq.note_id
                JOIN communities c ON c.id = n.community_id
-              WHERE n.community_id IN (?)`;
-  const params = [ids];
+              WHERE n.community_id IN (?)
+                AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)`;
+  const params = [ids, userId];
 
   if (date) {
     sql += " AND DATE(CONVERT_TZ(nq.created_at, '+00:00', '+09:00')) = ?";
@@ -1098,10 +1101,11 @@ app.get("/api/community-quizzes/calendar-summary", requireLogin, wrap(async (req
        FROM note_quizzes nq
        JOIN notes n ON n.id = nq.note_id
       WHERE n.community_id IN (?)
+        AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)
         AND DATE_FORMAT(CONVERT_TZ(nq.created_at, '+00:00', '+09:00'), '%Y-%m') = ?
       GROUP BY date
       ORDER BY date ASC`,
-    [ids, month]
+    [ids, userId, month]
   );
 
   res.json({ month, days: rows });

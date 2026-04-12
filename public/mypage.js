@@ -281,6 +281,27 @@ function setDaySummary(targetId, message) {
   if (el) el.textContent = message || "";
 }
 
+function setFilterPanelState({ sectionId, hintId, selectedDate, contextLabel }) {
+  const section = $(sectionId);
+  if (!section) return;
+  const enabled = Boolean(selectedDate);
+
+  section.classList.toggle("is-disabled", !enabled);
+  section.querySelectorAll("input, select, button").forEach((control) => {
+    if (control.id === "btnClearMyDate" || control.id === "btnClearCommunityDate") {
+      control.disabled = false;
+      return;
+    }
+    control.disabled = !enabled;
+  });
+
+  const hintEl = $(hintId);
+  if (!hintEl) return;
+  hintEl.textContent = enabled
+    ? `${contextLabel}を表示中です。検索・並び替えを使えます。`
+    : "日付を選択すると検索・並び替えが有効になります。";
+}
+
 function debounce(fn, waitMs = 300) {
   let timer = null;
   return (...args) => {
@@ -348,10 +369,16 @@ function renderMyNotesAndQuizzes() {
   if (!listEl) return;
 
   updateSelectedDateIndicator("mySelectedDate", myPageState.mySelectedDate);
+  setFilterPanelState({
+    sectionId: "myFilterSection",
+    hintId: "myFilterHint",
+    selectedDate: myPageState.mySelectedDate,
+    contextLabel: formatDateLabel(myPageState.mySelectedDate),
+  });
 
   if (!myPageState.mySelectedDate) {
     setDaySummary("myDayCountSummary", "日付を選択すると、その日に作成したノートとクイズを表示します。");
-    listEl.innerHTML = `<div class="small">日付を選択してください。選択後にノートとクイズを表示します。</div>`;
+    listEl.innerHTML = `<div class="small">カレンダーで日付を選択してください。選択した1日分のノートとクイズのみ表示します。</div>`;
     return;
   }
 
@@ -533,10 +560,16 @@ function renderCommunityNotesAndQuizzes() {
   const el = $("communityList");
   if (!el) return;
   updateSelectedDateIndicator("communitySelectedDate", myPageState.communitySelectedDate);
+  setFilterPanelState({
+    sectionId: "communityFilterSection",
+    hintId: "communityFilterHint",
+    selectedDate: myPageState.communitySelectedDate,
+    contextLabel: formatDateLabel(myPageState.communitySelectedDate),
+  });
 
   if (!myPageState.communitySelectedDate) {
     setDaySummary("communityDayCountSummary", "日付を選択すると、その日に作成したコミュニティノートと関連クイズを表示します。");
-    el.innerHTML = `<div class="small">日付を選択してください。選択後にコミュニティノートと関連クイズを表示します。</div>`;
+    el.innerHTML = `<div class="small">カレンダーで日付を選択してください。選択した1日分のコミュニティノートと関連クイズを表示します。</div>`;
     return;
   }
 
@@ -592,7 +625,7 @@ function renderCommunityNotesAndQuizzes() {
         <div>${escapeHtml(q.question_text || "問題文なし")}${communityLabel}</div>
         <div class="small">作成日時: ${new Date(q.created_at).toLocaleString("ja-JP")}</div>
         <div class="row" style="margin-top:8px;">
-          <a class="button-link" href="/my-quizzes.html">クイズ一覧で確認</a>
+          <a class="button-link" href="/note_detail.html?id=${encodeURIComponent(q.note_id)}&from=${encodeURIComponent("/mypage.html")}">元ノートを開く</a>
         </div>
       </div>
     `;

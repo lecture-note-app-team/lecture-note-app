@@ -43,23 +43,69 @@
 
   <div class="card">
     <h2>自分のノート</h2>
-    <div class="calendar-filter-row">
-      <label for="myDateFilter">作成日で絞り込み</label>
-      <input id="myDateFilter" type="date" />
-      <button id="btnClearMyDate" type="button">日付解除</button>
-      <div id="mySelectedDate" class="selected-date-indicator">日付未選択（全件表示）</div>
-    </div>
-    <div id="myList"></div>
+    <section class="calendar-panel">
+      <div class="calendar-header">
+        <button id="btnMyPrevMonth" type="button">前月</button>
+        <div id="myMonthLabel" class="calendar-month-label"></div>
+        <button id="btnMyNextMonth" type="button">次月</button>
+      </div>
+      <div id="myCalendar" class="calendar-grid"></div>
+      <div id="mySelectedDate" class="selected-date-indicator">対象日: すべての日付</div>
+      <div id="myDayCountSummary" class="small"></div>
+    </section>
+    <section class="filter-panel">
+      <h3>検索・並び替え</h3>
+      <div class="grid-2">
+        <div>
+          <label for="mySearchInput">検索</label>
+          <input id="mySearchInput" type="search" placeholder="タイトル・本文・タグなどで検索" />
+        </div>
+        <div>
+          <label for="mySortSelect">並び替え</label>
+          <select id="mySortSelect">
+            <option value="desc">新しい順</option>
+            <option value="asc">古い順</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnClearMyDate" type="button">日付解除</button>
+      </div>
+    </section>
+    <div id="myList">読み込み中…</div>
   </div>
 
   <div class="card">
     <h2>コミュニティ内ノート</h2>
-    <div class="calendar-filter-row">
-      <label for="communityDateFilter">作成日で絞り込み</label>
-      <input id="communityDateFilter" type="date" />
-      <button id="btnClearCommunityDate" type="button">日付解除</button>
-      <div id="communitySelectedDate" class="selected-date-indicator">日付未選択（全件表示）</div>
-    </div>
+    <section class="calendar-panel">
+      <div class="calendar-header">
+        <button id="btnCommunityPrevMonth" type="button">前月</button>
+        <div id="communityMonthLabel" class="calendar-month-label"></div>
+        <button id="btnCommunityNextMonth" type="button">次月</button>
+      </div>
+      <div id="communityCalendar" class="calendar-grid"></div>
+      <div id="communitySelectedDate" class="selected-date-indicator">対象日: すべての日付</div>
+      <div id="communityDayCountSummary" class="small"></div>
+    </section>
+    <section class="filter-panel">
+      <h3>検索・並び替え</h3>
+      <div class="grid-2">
+        <div>
+          <label for="communitySearchInput">検索</label>
+          <input id="communitySearchInput" type="search" placeholder="タイトル・本文・タグなどで検索" />
+        </div>
+        <div>
+          <label for="communitySortSelect">並び替え</label>
+          <select id="communitySortSelect">
+            <option value="desc">新しい順</option>
+            <option value="asc">古い順</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnClearCommunityDate" type="button">日付解除</button>
+      </div>
+    </section>
     <div id="communityList">読み込み中…</div>
   </div>
 

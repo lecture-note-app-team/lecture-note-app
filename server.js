@@ -76,6 +76,20 @@ function attachJstDateKey(rows, sourceField = "created_at", targetField = "creat
   }));
 }
 
+function normalizeSortOrder(rawValue) {
+  return String(rawValue || "").toLowerCase() === "asc" ? "ASC" : "DESC";
+}
+
+function parseDateFilter(rawDate) {
+  const value = String(rawDate || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function parseMonthFilter(rawMonth) {
+  const value = String(rawMonth || "").trim();
+  return /^\d{4}-\d{2}$/.test(value) ? value : "";
+}
+
 // Railwayなどプロキシ配下
 if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1);
@@ -948,6 +962,9 @@ app.get("/api/notes", wrap(async (req, res) => {
 // 自分が所属しているコミュニティ内のノート一覧（ログイン必須）
 app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;
+  const date = parseDateFilter(req.query.date);
+  const search = String(req.query.search || "").trim();
+  const sortOrder = normalizeSortOrder(req.query.sort);
 
   // 自分が所属しているコミュID一覧
   const [crows] = await pool.query(
@@ -960,19 +977,52 @@ app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
 
   // そのコミュ内ノートを取得（誰が書いたものでも）
   // ※ notes に community_id が入っている前提
-  const [rows] = await pool.query(
-    `SELECT
+  let sql = `SELECT
         n.id, n.community_id, n.user_id, n.visibility, n.source_type,
-        n.author_name, n.course_name, n.lecture_no, n.lecture_date, n.title, n.created_at,
+        n.author_name, n.course_name, n.lecture_no, n.lecture_date, n.title, n.body_raw, n.created_at,
         c.name AS community_name
      FROM notes n
      JOIN communities c ON c.id = n.community_id
-     WHERE n.community_id IN (?)
-     ORDER BY n.lecture_date DESC, n.id DESC`,
-    [ids]
-  );
+     WHERE n.community_id IN (?)`;
+  const params = [ids];
+  if (date) {
+    sql += " AND DATE(CONVERT_TZ(n.created_at, '+00:00', '+09:00')) = ?";
+    params.push(date);
+  }
+  if (search) {
+    sql += " AND (n.title LIKE ? OR n.body_raw LIKE ? OR n.course_name LIKE ?)";
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  sql += ` ORDER BY n.created_at ${sortOrder}, n.id ${sortOrder}`;
+
+  const [rows] = await pool.query(sql, params);
 
   res.json(attachJstDateKey(rows));
+}));
+
+app.get("/api/community-notes/calendar-summary", requireLogin, wrap(async (req, res) => {
+  const userId = req.session.userId;
+  const month = parseMonthFilter(req.query.month);
+  if (!month) return res.status(400).json({ message: "month(YYYY-MM) is required" });
+
+  const [crows] = await pool.query(
+    `SELECT community_id FROM user_communities WHERE user_id = ?`,
+    [userId]
+  );
+  if (!crows.length) return res.json({ month, days: [] });
+  const ids = crows.map(r => r.community_id);
+
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(CONVERT_TZ(n.created_at, '+00:00', '+09:00'), '%Y-%m-%d') AS date,
+            COUNT(*) AS count
+       FROM notes n
+      WHERE n.community_id IN (?)
+        AND DATE_FORMAT(CONVERT_TZ(n.created_at, '+00:00', '+09:00'), '%Y-%m') = ?
+      GROUP BY date
+      ORDER BY date ASC`,
+    [ids, month]
+  );
+  res.json({ month, days: rows });
 }));
 
 // 詳細：閲覧権限に従う（community or private）
@@ -1119,16 +1169,45 @@ app.post("/api/notes", requireLogin, wrap(async (req, res) => {
 // マイページ：自分のノート一覧（public/private両方、ログイン必須）
 app.get("/api/my-notes", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;
+  const date = parseDateFilter(req.query.date);
+  const search = String(req.query.search || "").trim();
+  const sortOrder = normalizeSortOrder(req.query.sort);
 
-  const [rows] = await pool.query(
-    `SELECT id, community_id, visibility, source_type, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
+  let sql = `SELECT id, community_id, visibility, source_type, university_id, author_name, course_name, lecture_no, lecture_date, title, created_at
        FROM notes
-      WHERE user_id = ?
-      ORDER BY lecture_date DESC, id DESC`,
-    [userId]
-  );
+      WHERE user_id = ?`;
+  const params = [userId];
+  if (date) {
+    sql += " AND DATE(CONVERT_TZ(created_at, '+00:00', '+09:00')) = ?";
+    params.push(date);
+  }
+  if (search) {
+    sql += " AND (title LIKE ? OR body_raw LIKE ? OR course_name LIKE ?)";
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  sql += ` ORDER BY created_at ${sortOrder}, id ${sortOrder}`;
+
+  const [rows] = await pool.query(sql, params);
 
   res.json(attachJstDateKey(rows));
+}));
+
+app.get("/api/my-notes/calendar-summary", requireLogin, wrap(async (req, res) => {
+  const userId = req.session.userId;
+  const month = parseMonthFilter(req.query.month);
+  if (!month) return res.status(400).json({ message: "month(YYYY-MM) is required" });
+
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+09:00'), '%Y-%m-%d') AS date,
+            COUNT(*) AS count
+       FROM notes
+      WHERE user_id = ?
+        AND DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+09:00'), '%Y-%m') = ?
+      GROUP BY date
+      ORDER BY date ASC`,
+    [userId, month]
+  );
+  res.json({ month, days: rows });
 }));
 
 // 自分のノート削除（ログイン必須・本人のみ）
@@ -2592,6 +2671,9 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
   const userId = req.session.userId;
   const noteId = req.query.note_id ? Number(req.query.note_id) : null;
   const quizType = String(req.query.quiz_type || "").trim();
+  const date = parseDateFilter(req.query.date);
+  const search = String(req.query.search || "").trim();
+  const sortOrder = normalizeSortOrder(req.query.sort);
   const choiceSelect = await buildNoteQuizSelectChoiceFragments();
 
   let sql = `
@@ -2626,7 +2708,15 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
     sql += " AND nq.type = ?";
     params.push(quizType);
   }
-  sql += " ORDER BY nq.created_at DESC, nq.id DESC";
+  if (date) {
+    sql += " AND DATE(CONVERT_TZ(nq.created_at, '+00:00', '+09:00')) = ?";
+    params.push(date);
+  }
+  if (search) {
+    sql += " AND (nq.question LIKE ? OR nq.answer LIKE ?)";
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  sql += ` ORDER BY nq.created_at ${sortOrder}, nq.id ${sortOrder}`;
 
   const [rows] = await pool.query(sql, params);
   const normalizedRows = rows.map((row) => {
@@ -2638,6 +2728,25 @@ app.get("/api/quizzes/mine", requireLogin, wrap(async (req, res) => {
     };
   });
   res.json({ success: true, data: { quizzes: normalizedRows } });
+}));
+
+app.get("/api/quizzes/mine/calendar-summary", requireLogin, wrap(async (req, res) => {
+  const userId = req.session.userId;
+  const month = parseMonthFilter(req.query.month);
+  if (!month) return res.status(400).json({ message: "month(YYYY-MM) is required" });
+
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+09:00'), '%Y-%m-%d') AS date,
+            COUNT(*) AS count
+       FROM note_quizzes
+      WHERE user_id = ?
+        AND DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+09:00'), '%Y-%m') = ?
+      GROUP BY date
+      ORDER BY date ASC`,
+    [userId, month]
+  );
+
+  res.json({ month, days: rows });
 }));
 
 app.get("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {

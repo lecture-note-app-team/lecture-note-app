@@ -252,46 +252,135 @@ function quizTypeLabel(type) {
 
 const myPageState = {
   mySelectedDate: "",
+  myCurrentMonth: toMonthKey(new Date()),
+  mySearch: "",
+  mySort: "desc",
   myNotes: [],
   myQuizzes: [],
+  mySummary: new Map(),
+  myLoading: false,
   communitySelectedDate: "",
+  communityCurrentMonth: toMonthKey(new Date()),
+  communitySearch: "",
+  communitySort: "desc",
   communityNotes: [],
+  communitySummary: new Map(),
+  communityLoading: false,
 };
+
+function toMonthKey(dateObj) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const [y, m] = String(monthKey || "").split("-").map(Number);
+  const base = new Date(Date.UTC(y || 1970, (m || 1) - 1 + delta, 1));
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(monthKey) {
+  const [y, m] = String(monthKey || "").split("-").map(Number);
+  return `${y}年${m}月`;
+}
+
+function formatDateLabel(value) {
+  if (!value) return "対象日: すべての日付";
+  const d = new Date(`${value}T00:00:00+09:00`);
+  if (Number.isNaN(d.getTime())) return "対象日: すべての日付";
+  const label = d.toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+  return `対象日: ${label}`;
+}
 
 function updateSelectedDateIndicator(targetId, selectedDate) {
   const el = $(targetId);
   if (!el) return;
-  const label = formatDateLabel(selectedDate);
-  el.textContent = selectedDate ? `選択中: ${label}` : label;
+  el.textContent = formatDateLabel(selectedDate);
   el.classList.toggle("is-active", Boolean(selectedDate));
+}
+
+function setDaySummary(targetId, message) {
+  const el = $(targetId);
+  if (el) el.textContent = message || "";
+}
+
+function buildUrl(path, params = {}) {
+  const sp = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === "") return;
+    sp.set(k, String(v));
+  });
+  const qs = sp.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+function renderCalendar({ containerId, monthLabelId, monthKey, selectedDate, summaryMap, onSelect }) {
+  const container = $(containerId);
+  const monthLabelEl = $(monthLabelId);
+  if (!container || !monthLabelEl) return;
+  monthLabelEl.textContent = monthLabel(monthKey);
+
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  const weekdayHtml = ["日", "月", "火", "水", "木", "金", "土"].map((w) => `<div class="calendar-weekday">${w}</div>`).join("");
+  let daysHtml = "";
+  for (let i = 0; i < firstDow; i += 1) {
+    daysHtml += '<div class="calendar-day is-empty" aria-hidden="true"></div>';
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const summary = summaryMap.get(dateKey) || {};
+    const badges = [];
+    if (summary.noteCount) badges.push(`<span class="calendar-badge">ノート ${summary.noteCount}</span>`);
+    if (summary.quizCount) badges.push(`<span class="calendar-badge">クイズ ${summary.quizCount}</span>`);
+    const selectedClass = selectedDate === dateKey ? "is-selected" : "";
+
+    daysHtml += `
+      <button type="button" class="calendar-day ${selectedClass}" data-calendar-date="${dateKey}">
+        <span class="calendar-day-number">${day}</span>
+        <span class="calendar-badges">${badges.join("")}</span>
+      </button>
+    `;
+  }
+
+  container.innerHTML = weekdayHtml + daysHtml;
+  container.querySelectorAll("[data-calendar-date]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const clicked = btn.dataset.calendarDate || "";
+      onSelect(clicked === selectedDate ? "" : clicked);
+    });
+  });
 }
 
 function renderMyNotesAndQuizzes() {
   const listEl = $("myList");
   if (!listEl) return;
 
-  const filteredNotes = applyDateFilter(myPageState.myNotes, myPageState.mySelectedDate);
-  const filteredNoteIds = new Set(filteredNotes.map((note) => Number(note.id)));
-  const filteredQuizzes = myPageState.mySelectedDate
-    ? myPageState.myQuizzes.filter((quiz) => filteredNoteIds.has(Number(quiz.note_id)))
-    : myPageState.myQuizzes;
-  const noteMap = new Map(filteredNotes.map((n) => [String(n.id), n]));
   updateSelectedDateIndicator("mySelectedDate", myPageState.mySelectedDate);
 
-  const notesHtml = filteredNotes.map((n) => {
+  const noteMap = new Map(myPageState.myNotes.map((n) => [String(n.id), n]));
+  const notesHtml = myPageState.myNotes.map((n) => {
     const tag = visibilityLabel(n.visibility);
     const author = n.author_name ? ` / 投稿名：${escapeHtml(n.author_name)}` : "";
     const comm = n.community_id ? ` <span style="font-size:12px; color:#666;">🏠コミュID:${n.community_id}</span>` : "";
     return `
       <div class="card">
         <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
-          <strong>${escapeHtml(n.title)}</strong>
+          <strong>[ノート] ${escapeHtml(n.title)}</strong>
           <span style="font-size:12px; color:#666;">${tag}</span>
           ${comm}
         </div>
         <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
         <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
-        <div class="small" style="margin-top:6px;">追加機能: クイズ生成（無料枠あり） / AI要約（無料枠あり） / PDF出力（Pro）</div>
         <div class="row" style="margin-top:8px;">
           <button class="btnOpen" data-note-open="${n.id}">開く</button>
           <button class="btnToggle" data-note-toggle="${n.id}">${toggleButtonText(n.visibility)}</button>
@@ -312,10 +401,10 @@ function renderMyNotesAndQuizzes() {
     `;
   }).join("");
 
-  const quizHtml = filteredQuizzes.map((q) => `
+  const quizHtml = myPageState.myQuizzes.map((q) => `
     <div class="card">
       <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
-        <strong>${escapeHtml(q.title || `ノートクイズ #${q.id}`)}</strong>
+        <strong>[クイズ] ${escapeHtml(q.title || `ノートクイズ #${q.id}`)}</strong>
         <span style="font-size:12px; color:#666;">${quizTypeLabel(q.quiz_type)}</span>
       </div>
       <div>${escapeHtml(q.question_text || "問題文なし")}</div>
@@ -326,22 +415,24 @@ function renderMyNotesAndQuizzes() {
     </div>
   `).join("");
 
-  const noteEmpty = myPageState.mySelectedDate
-    ? "この日に作成されたノートはありません。"
-    : "表示できるノートはありません。";
-  const quizEmpty = myPageState.mySelectedDate
-    ? "この日に作成されたノートに紐づくクイズはありません。"
-    : "表示できるクイズはありません。";
+  const targetLabel = myPageState.mySelectedDate ? `対象日: ${myPageState.mySelectedDate}` : "対象日: すべての日付";
+  const summary = `${targetLabel} / ノート ${myPageState.myNotes.length}件・クイズ ${myPageState.myQuizzes.length}件`;
+  setDaySummary("myDayCountSummary", summary);
+
+  if (!myPageState.myNotes.length && !myPageState.myQuizzes.length) {
+    listEl.innerHTML = `<div class="small">条件に合うノート・クイズはありません。</div>`;
+    return;
+  }
 
   listEl.innerHTML = `
     <div class="content-split">
       <section>
         <h3>ノート</h3>
-        ${notesHtml || `<div class="small">${noteEmpty}</div>`}
+        ${notesHtml || `<div class="small">条件に合うノートはありません。</div>`}
       </section>
       <section>
         <h3>クイズ</h3>
-        ${quizHtml || `<div class="small">${quizEmpty}</div>`}
+        ${quizHtml || `<div class="small">条件に合うクイズはありません。</div>`}
       </section>
     </div>
   `;
@@ -391,19 +482,151 @@ function renderMyNotesAndQuizzes() {
 }
 
 async function loadMyNotes() {
+  if (myPageState.myLoading) return;
+  myPageState.myLoading = true;
   const listEl = $("myList");
   if (listEl) listEl.innerHTML = "読み込み中…";
 
   try {
-    const [noteRows, myQuizData] = await Promise.all([
-      api("/api/my-notes"),
-      api("/api/quizzes/mine"),
+    const [noteSummary, quizSummary, noteRows, myQuizData] = await Promise.all([
+      api(buildUrl("/api/my-notes/calendar-summary", { month: myPageState.myCurrentMonth })),
+      api(buildUrl("/api/quizzes/mine/calendar-summary", { month: myPageState.myCurrentMonth })),
+      api(buildUrl("/api/my-notes", {
+        date: myPageState.mySelectedDate,
+        search: myPageState.mySearch,
+        sort: myPageState.mySort,
+      })),
+      api(buildUrl("/api/quizzes/mine", {
+        date: myPageState.mySelectedDate,
+        search: myPageState.mySearch,
+        sort: myPageState.mySort,
+      })),
     ]);
+
+    const summaryMap = new Map();
+    (noteSummary?.days || []).forEach((d) => {
+      summaryMap.set(d.date, { ...(summaryMap.get(d.date) || {}), noteCount: Number(d.count || 0) });
+    });
+    (quizSummary?.days || []).forEach((d) => {
+      summaryMap.set(d.date, { ...(summaryMap.get(d.date) || {}), quizCount: Number(d.count || 0) });
+    });
+
+    myPageState.mySummary = summaryMap;
     myPageState.myNotes = Array.isArray(noteRows) ? noteRows : [];
     myPageState.myQuizzes = Array.isArray(myQuizData?.data?.quizzes) ? myQuizData.data.quizzes : [];
+
+    renderCalendar({
+      containerId: "myCalendar",
+      monthLabelId: "myMonthLabel",
+      monthKey: myPageState.myCurrentMonth,
+      selectedDate: myPageState.mySelectedDate,
+      summaryMap: myPageState.mySummary,
+      onSelect: (dateKey) => {
+        myPageState.mySelectedDate = dateKey;
+        loadMyNotes();
+      },
+    });
     renderMyNotesAndQuizzes();
   } catch (e) {
     if (listEl) listEl.innerHTML = `取得失敗: ${escapeHtml(e.message)}<br><a href="/login.html">ログイン</a>`;
+  } finally {
+    myPageState.myLoading = false;
+  }
+}
+
+function renderCommunityNotes() {
+  const el = $("communityList");
+  if (!el) return;
+  updateSelectedDateIndicator("communitySelectedDate", myPageState.communitySelectedDate);
+
+  const targetLabel = myPageState.communitySelectedDate ? `対象日: ${myPageState.communitySelectedDate}` : "対象日: すべての日付";
+  setDaySummary("communityDayCountSummary", `${targetLabel} / ${myPageState.communityNotes.length}件`);
+
+  if (!myPageState.communityNotes.length) {
+    el.innerHTML = `<div class="small">条件に合うコミュニティノートはありません。</div>`;
+    return;
+  }
+
+  const rowsByCommunity = new Map();
+  for (const row of myPageState.communityNotes) {
+    const key = row.community_name || `community:${row.community_id}`;
+    const items = rowsByCommunity.get(key) || [];
+    items.push(row);
+    rowsByCommunity.set(key, items);
+  }
+
+  el.innerHTML = Array.from(rowsByCommunity.entries()).map(([communityLabel, notes]) => {
+    const cards = notes.map((n) => {
+      const author = n.author_name ? ` / 投稿：${escapeHtml(n.author_name)}` : "";
+      return `
+        <div class="card">
+          <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+            <strong>${escapeHtml(n.title)}</strong>
+          </div>
+          <div>${escapeHtml(n.course_name)} / ${escapeHtml(n.lecture_no)} / ${n.lecture_date}${author}</div>
+          <div class="small">作成日時: ${new Date(n.created_at).toLocaleString("ja-JP")}</div>
+          <div class="row" style="margin-top:8px;">
+            <button class="btnOpen" data-community-open="${n.id}">開く</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <section style="margin-bottom:12px;">
+        <h3 style="margin:0 0 8px;">🏷 ${escapeHtml(communityLabel)}</h3>
+        ${cards}
+      </section>
+    `;
+  }).join("");
+
+  el.querySelectorAll("[data-community-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      location.href = "/note_detail.html?id=" + btn.dataset.communityOpen + "&from=" + encodeURIComponent("/mypage.html");
+    });
+  });
+}
+
+async function loadCommunityNotes() {
+  if (myPageState.communityLoading) return;
+  myPageState.communityLoading = true;
+
+  const el = document.getElementById("communityList");
+  if (el) el.textContent = "読み込み中…";
+
+  try {
+    const [summaryData, rows] = await Promise.all([
+      api(buildUrl("/api/community-notes/calendar-summary", { month: myPageState.communityCurrentMonth })),
+      api(buildUrl("/api/community-notes", {
+        date: myPageState.communitySelectedDate,
+        search: myPageState.communitySearch,
+        sort: myPageState.communitySort,
+      })),
+    ]);
+
+    const summaryMap = new Map();
+    (summaryData?.days || []).forEach((d) => {
+      summaryMap.set(d.date, { noteCount: Number(d.count || 0) });
+    });
+    myPageState.communitySummary = summaryMap;
+    myPageState.communityNotes = Array.isArray(rows) ? rows : [];
+
+    renderCalendar({
+      containerId: "communityCalendar",
+      monthLabelId: "communityMonthLabel",
+      monthKey: myPageState.communityCurrentMonth,
+      selectedDate: myPageState.communitySelectedDate,
+      summaryMap: myPageState.communitySummary,
+      onSelect: (dateKey) => {
+        myPageState.communitySelectedDate = dateKey;
+        loadCommunityNotes();
+      },
+    });
+    renderCommunityNotes();
+  } catch (e) {
+    if (el) el.innerHTML = `取得失敗: ${escapeHtml(e.message)}`;
+  } finally {
+    myPageState.communityLoading = false;
   }
 }
 
@@ -798,23 +1021,45 @@ async function initMyPage() {
   $("btnCancelSubscription")?.addEventListener("click", (e) => {
     handleCancelSubscription(e.currentTarget);
   });
-  $("myDateFilter")?.addEventListener("change", (e) => {
-    myPageState.mySelectedDate = e.currentTarget.value || "";
-    renderMyNotesAndQuizzes();
+  $("btnMyPrevMonth")?.addEventListener("click", () => {
+    myPageState.myCurrentMonth = shiftMonthKey(myPageState.myCurrentMonth, -1);
+    loadMyNotes();
   });
-  $("communityDateFilter")?.addEventListener("change", (e) => {
-    myPageState.communitySelectedDate = e.currentTarget.value || "";
-    renderCommunityNotes();
+  $("btnMyNextMonth")?.addEventListener("click", () => {
+    myPageState.myCurrentMonth = shiftMonthKey(myPageState.myCurrentMonth, 1);
+    loadMyNotes();
+  });
+  $("btnCommunityPrevMonth")?.addEventListener("click", () => {
+    myPageState.communityCurrentMonth = shiftMonthKey(myPageState.communityCurrentMonth, -1);
+    loadCommunityNotes();
+  });
+  $("btnCommunityNextMonth")?.addEventListener("click", () => {
+    myPageState.communityCurrentMonth = shiftMonthKey(myPageState.communityCurrentMonth, 1);
+    loadCommunityNotes();
+  });
+  $("mySearchInput")?.addEventListener("input", (e) => {
+    myPageState.mySearch = (e.currentTarget.value || "").trim();
+    loadMyNotes();
+  });
+  $("mySortSelect")?.addEventListener("change", (e) => {
+    myPageState.mySort = e.currentTarget.value || "desc";
+    loadMyNotes();
+  });
+  $("communitySearchInput")?.addEventListener("input", (e) => {
+    myPageState.communitySearch = (e.currentTarget.value || "").trim();
+    loadCommunityNotes();
+  });
+  $("communitySortSelect")?.addEventListener("change", (e) => {
+    myPageState.communitySort = e.currentTarget.value || "desc";
+    loadCommunityNotes();
   });
   $("btnClearMyDate")?.addEventListener("click", () => {
     myPageState.mySelectedDate = "";
-    if ($("myDateFilter")) $("myDateFilter").value = "";
-    renderMyNotesAndQuizzes();
+    loadMyNotes();
   });
   $("btnClearCommunityDate")?.addEventListener("click", () => {
     myPageState.communitySelectedDate = "";
-    if ($("communityDateFilter")) $("communityDateFilter").value = "";
-    renderCommunityNotes();
+    loadCommunityNotes();
   });
 
   await Promise.all([

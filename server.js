@@ -1135,44 +1135,55 @@ app.post("/api/notes/preview", wrap(async (req, res) => {
   res.json({ body_md });
 }));
 
-app.post("/api/notes/extract-text", requireLogin, wrap(async (req, res) => {
-  const { image_base64, mime_type, file_name, file_size } = req.body || {};
-  const mimeType = String(mime_type || "").toLowerCase();
-  const fileName = String(file_name || "");
-  const ext = path.extname(fileName).toLowerCase();
-  const fileSize = Number(file_size || 0);
+app.post(
+  "/api/notes/extract-text",
+  requireLogin,
+  requireUsageLimit("ocr_extraction", "ocr_extraction_monthly_limit", "OCRの月間利用上限に達しました。翌月にリセットされます。"),
+  wrap(async (req, res) => {
+    const { image_base64, mime_type, file_name, file_size } = req.body || {};
+    const mimeType = String(mime_type || "").toLowerCase();
+    const fileName = String(file_name || "");
+    const ext = path.extname(fileName).toLowerCase();
+    const fileSize = Number(file_size || 0);
 
-  if (!image_base64 || !mimeType || !fileName || !fileSize) {
-    return res.status(400).json({ message: "画像データが不足しています。", code: "IMAGE_FILE_REQUIRED" });
-  }
+    if (!image_base64 || !mimeType || !fileName || !fileSize) {
+      return res.status(400).json({ message: "画像データが不足しています。", code: "IMAGE_FILE_REQUIRED" });
+    }
 
-  if (!OCR_ALLOWED_MIME_TYPES.has(mimeType) || !OCR_ALLOWED_EXTENSIONS.has(ext)) {
-    return res.status(400).json({
-      message: "対応していない画像形式です。jpg / jpeg / png / webp をアップロードしてください。",
-      code: "UNSUPPORTED_IMAGE_TYPE",
+    if (!OCR_ALLOWED_MIME_TYPES.has(mimeType) || !OCR_ALLOWED_EXTENSIONS.has(ext)) {
+      return res.status(400).json({
+        message: "対応していない画像形式です。jpg / jpeg / png / webp をアップロードしてください。",
+        code: "UNSUPPORTED_IMAGE_TYPE",
+      });
+    }
+
+    if (fileSize > OCR_MAX_FILE_SIZE_BYTES) {
+      return res.status(400).json({
+        message: `画像サイズが大きすぎます。最大${Math.floor(OCR_MAX_FILE_SIZE_BYTES / (1024 * 1024))}MBまでです。`,
+        code: "FILE_TOO_LARGE",
+      });
+    }
+
+    const extractedText = await extractTextFromImageWithOpenAI({ base64Image: String(image_base64), mimetype: mimeType });
+    if (!extractedText || extractedText.length < 10) {
+      return res.status(422).json({
+        message: "画像から十分な文字を抽出できませんでした。鮮明な画像で再度お試しください。",
+        code: "OCR_TEXT_TOO_SHORT",
+      });
+    }
+
+    await incrementUsageCount(req.session.userId, "ocr_extraction", 1);
+    res.json({
+      text: extractedText,
+      source_type: "image",
+      usage: {
+        featureCode: "ocr_extraction",
+        usedAfter: (req.usageLimit?.used || 0) + 1,
+        limit: req.usageLimit?.limit,
+      },
     });
-  }
-
-  if (fileSize > OCR_MAX_FILE_SIZE_BYTES) {
-    return res.status(400).json({
-      message: `画像サイズが大きすぎます。最大${Math.floor(OCR_MAX_FILE_SIZE_BYTES / (1024 * 1024))}MBまでです。`,
-      code: "FILE_TOO_LARGE",
-    });
-  }
-
-  const extractedText = await extractTextFromImageWithOpenAI({ base64Image: String(image_base64), mimetype: mimeType });
-  if (!extractedText || extractedText.length < 10) {
-    return res.status(422).json({
-      message: "画像から十分な文字を抽出できませんでした。鮮明な画像で再度お試しください。",
-      code: "OCR_TEXT_TOO_SHORT",
-    });
-  }
-
-  res.json({
-    text: extractedText,
-    source_type: "image",
-  });
-}));
+  })
+);
 
 // 保存（投稿）：ログイン必須
 // community_id がある場合は所属必須。大学名が空なら「（コミュ）」で補完（DB要件対策）

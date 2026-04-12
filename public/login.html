@@ -215,9 +215,9 @@
       const limitLabel = (value) => Number(value) === -1 ? "無制限" : `月 ${Number(value || 0)} 回`;
       const rows = [
         `ノート上限: ${features.max_notes === -1 ? "無制限" : Number(features.max_notes || 0) + "件"}`,
-        `クイズ手動作成: ${limitLabel(features.quiz_creation_monthly_limit)}`,
         `AI要約: ${limitLabel(features.ai_summary_monthly_limit)}`,
         `AIクイズ生成: ${limitLabel(features.quiz_generation_monthly_limit)}`,
+        `クイズ手動作成: ${limitLabel(features.quiz_creation_monthly_limit)}`,
         `四択問題不正解回答AI生成: ${limitLabel(features.quiz_distractor_generation_monthly_limit)}`,
         `PDF出力: ${features.can_export_pdf ? "利用可（Pro）" : "利用不可（Pro限定）"}`,
       ];

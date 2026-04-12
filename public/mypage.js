@@ -66,7 +66,7 @@ function formatErrorMessage(err) {
   if (err.status === 401) return "ログインが必要です。ログイン後にお試しください。";
   if (err.status === 402) return "有料プラン契約が必要です。Proプランに登録してください。";
   if (err.status === 403) return "Pro限定または権限不足のため実行できません。";
-  if (err.status === 429) return err.message || "今月の利用上限に達しました。翌月にリセットされます。";
+  if (err.status === 429) return err.message || "月間利用上限に達しました。無制限の機能は継続して利用できます。";
 
   return err.message || "API呼び出しに失敗しました";
 }

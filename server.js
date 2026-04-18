@@ -294,16 +294,16 @@ async function getNoteById(noteId) {
 async function canViewNote(req, note) {
   if (!note) return { ok: false, status: 404, message: "not found" };
 
-  if (note.visibility === "private") {
-    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
-    if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
-    return { ok: true };
-  }
-
   if (note.community_id) {
     if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
     const belongs = await userBelongsToCommunity(req.session.userId, note.community_id);
     if (!belongs) return { ok: false, status: 403, message: "forbidden" };
+    return { ok: true };
+  }
+
+  if (note.visibility === "private") {
+    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
+    if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
     return { ok: true };
   }
 
@@ -986,9 +986,8 @@ app.get("/api/community-notes", requireLogin, wrap(async (req, res) => {
         c.name AS community_name
      FROM notes n
      JOIN communities c ON c.id = n.community_id
-     WHERE n.community_id IN (?)
-       AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)`;
-  const params = [ids, userId];
+     WHERE n.community_id IN (?)`;
+  const params = [ids];
   if (date) {
     sql += " AND DATE(CONVERT_TZ(n.created_at, '+00:00', '+09:00')) = ?";
     params.push(date);
@@ -1021,11 +1020,10 @@ app.get("/api/community-notes/calendar-summary", requireLogin, wrap(async (req, 
             COUNT(*) AS count
        FROM notes n
       WHERE n.community_id IN (?)
-        AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)
         AND DATE_FORMAT(CONVERT_TZ(n.created_at, '+00:00', '+09:00'), '%Y-%m') = ?
       GROUP BY date
       ORDER BY date ASC`,
-    [ids, userId, month]
+    [ids, month]
   );
   res.json({ month, days: rows });
 }));
@@ -1065,9 +1063,8 @@ app.get("/api/community-quizzes", requireLogin, wrap(async (req, res) => {
                FROM note_quizzes nq
                JOIN notes n ON n.id = nq.note_id
                JOIN communities c ON c.id = n.community_id
-              WHERE n.community_id IN (?)
-                AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)`;
-  const params = [ids, userId];
+              WHERE n.community_id IN (?)`;
+  const params = [ids];
 
   if (date) {
     sql += " AND DATE(CONVERT_TZ(nq.created_at, '+00:00', '+09:00')) = ?";
@@ -1102,11 +1099,10 @@ app.get("/api/community-quizzes/calendar-summary", requireLogin, wrap(async (req
        FROM note_quizzes nq
        JOIN notes n ON n.id = nq.note_id
       WHERE n.community_id IN (?)
-        AND (COALESCE(n.visibility, 'private') <> 'private' OR n.user_id = ?)
         AND DATE_FORMAT(CONVERT_TZ(nq.created_at, '+00:00', '+09:00'), '%Y-%m') = ?
       GROUP BY date
       ORDER BY date ASC`,
-    [ids, userId, month]
+    [ids, month]
   );
 
   res.json({ month, days: rows });

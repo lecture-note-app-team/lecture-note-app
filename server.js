@@ -198,7 +198,7 @@ const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
 function normalizeVisibility(v) {
-  return v === "private" ? "private" : "public";
+  return v === "public" ? "public" : "private";
 }
 
 function slugifyJP(input) {
@@ -294,16 +294,17 @@ async function getNoteById(noteId) {
 async function canViewNote(req, note) {
   if (!note) return { ok: false, status: 404, message: "not found" };
 
+  if (note.visibility === "private") {
+    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
+    if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
+    return { ok: true };
+  }
+
   if (note.community_id) {
     if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
     const belongs = await userBelongsToCommunity(req.session.userId, note.community_id);
     if (!belongs) return { ok: false, status: 403, message: "forbidden" };
     return { ok: true };
-  }
-
-  if (note.visibility === "private") {
-    if (!req.session?.userId) return { ok: false, status: 401, message: "ログインしてください" };
-    if (note.user_id !== req.session.userId) return { ok: false, status: 403, message: "forbidden" };
   }
 
   return { ok: true };
@@ -1321,7 +1322,10 @@ app.patch("/api/notes/:id/visibility", requireLogin, wrap(async (req, res) => {
   const noteId = Number(req.params.id);
   const visibility = req.body?.visibility;
 
-  const vis = visibility === "private" ? "private" : "public";
+  if (visibility !== "private" && visibility !== "public") {
+    return res.status(400).json({ message: "invalid visibility" });
+  }
+  const vis = visibility;
 
   const note = await getNoteById(noteId);
   if (!note) return res.status(404).json({ message: "not found" });

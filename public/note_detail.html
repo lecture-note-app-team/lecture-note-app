@@ -86,6 +86,10 @@
         .replaceAll("'", "&#039;");
     }
 
+    function visibilityLabel(v) {
+      return v === "private" ? "🔒 非公開" : "🌐 公開";
+    }
+
     async function loadQuizzes(noteId) {
       const list = document.getElementById("quizList");
       list.textContent = "読み込み中...";
@@ -145,6 +149,7 @@
       const parts = [note.course_name, note.lecture_no, note.lecture_date].filter(Boolean);
       let meta = parts.join(" / ");
       if (note.author_name) meta += ` / 投稿：${note.author_name}`;
+      meta += ` / ${visibilityLabel(note.visibility)}`;
       document.getElementById("meta").textContent = meta;
 
       document.getElementById("md").textContent = note.body_md || "";

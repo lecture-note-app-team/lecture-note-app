@@ -41,7 +41,7 @@ function getForm() {
     lecture_date: $("lecture_date")?.value || "",
     title: $("title")?.value.trim() || "",
     body_raw: $("body_raw")?.value.trim() || "",
-    visibility: $("visibility")?.value || "public",
+    visibility: $("visibility")?.value || "private",
     source_type: window.__noteSourceType || "text",
   };
 }

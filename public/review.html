@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>復習 | 講義ノートメーカー</title>
+  <link rel="stylesheet" href="./style.css?v=1" />
+  <style>
+    .md h1, .md h2, .md h3 { margin: 14px 0 8px; }
+    .md ul { padding-left: 22px; }
+    .md li { margin: 4px 0; }
+    #reviewProgress { font-weight: 800; }
+    #noteBody.is-hidden { display: none; }
+  </style>
+</head>
+<body>
+  <a href="/mypage.html">← マイページへ</a>
+
+  <h1>復習</h1>
+  <div class="small" id="reviewProgress"></div>
+
+  <div id="sessionArea"></div>
+
+  <!-- marked（Markdown→HTML）とDOMPurify（XSS対策） -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+  <script src="./review.js?v=1"></script>
+</body>
+</html>

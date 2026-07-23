@@ -83,8 +83,19 @@ function formatQuizForStorage(quiz) {
   };
 }
 
-async function extractQuizPoints(openai, cleanedText) {
-  const prompt = buildExtractPointsPrompt({ cleanedText });
+// 本文の分量に応じて、抽出する要点の上限を決める（1回の生成で本文全体を網羅するため）
+// 短いノートではこれまで通り最低10問、長いノートではその分だけ増やす（上限30問）。
+const MIN_POINTS = 10;
+const MAX_POINTS = 30;
+const CHARS_PER_POINT = 200;
+
+function computeMaxPoints(cleanedText) {
+  const estimated = Math.ceil(String(cleanedText || "").length / CHARS_PER_POINT);
+  return Math.max(MIN_POINTS, Math.min(MAX_POINTS, estimated));
+}
+
+async function extractQuizPoints(openai, cleanedText, maxPoints = MIN_POINTS) {
+  const prompt = buildExtractPointsPrompt({ cleanedText, maxPoints });
   const resp = await openai.chat.completions.create({
     model: DEFAULT_MODEL,
     temperature: 0.1,
@@ -106,7 +117,7 @@ async function extractQuizPoints(openai, cleanedText) {
       source_quote: String(p.source_quote || "").trim(),
     }))
     .filter((p) => p.topic && p.fact && p.source_quote)
-    .slice(0, 18);
+    .slice(0, maxPoints);
 }
 
 async function generateQuizBatch(openai, params) {
@@ -125,16 +136,23 @@ async function generateQuizBatch(openai, params) {
   return parseAndValidateQuizResponse(text);
 }
 
+// 1回のAI呼び出しで要求する問題数の上限（品質・JSON出力の安定性のため分割する）
+const BATCH_SIZE = 12;
+
 async function regenerateMissingQuizzesIfNeeded(openai, params) {
   const { targetCount, cleanedText } = params;
   let accepted = [];
   let allReasons = [];
   let excluded = [];
 
-  for (let attempt = 0; attempt < 3 && accepted.length < targetCount; attempt++) {
+  // targetCountが多いほど分割回数が増えるため、必要な分だけ試行回数を確保する
+  // （品質フィルタで弾かれた分の埋め合わせも見込んで+2）
+  const maxAttempts = Math.min(8, Math.ceil(targetCount / BATCH_SIZE) + 2);
+
+  for (let attempt = 0; attempt < maxAttempts && accepted.length < targetCount; attempt++) {
     const batch = await generateQuizBatch(openai, {
       ...params,
-      count: targetCount - accepted.length,
+      count: Math.min(BATCH_SIZE, targetCount - accepted.length),
       existingTopics: excluded,
     });
 
@@ -147,9 +165,10 @@ async function regenerateMissingQuizzesIfNeeded(openai, params) {
   return { accepted, reasons: allReasons };
 }
 
-async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = 10, logger = console }) {
+async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = null, logger = console }) {
   const rawText = String(note?.body_raw || "");
   const { cleanedText, wasTruncated } = cleanNoteText(rawText);
+  const maxPoints = computeMaxPoints(cleanedText);
 
   logger.info("quiz_pipeline:start", {
     noteId: note?.id,
@@ -157,10 +176,17 @@ async function generateQuizzesWithQualityPipeline({ openai, note, targetCount = 
     cleanedLength: cleanedText.length,
     wasTruncated,
     targetCount,
+    maxPoints,
   });
 
-  const points = await extractQuizPoints(openai, cleanedText);
+  const points = await extractQuizPoints(openai, cleanedText, maxPoints);
   logger.info("quiz_pipeline:points", { count: points.length });
+
+  // targetCount未指定時は、抽出できた要点の数に合わせて自動決定する
+  // （＝本文の内容量に応じて1回の生成で網羅できる問題数を作る）
+  if (!targetCount) {
+    targetCount = Math.max(points.length, 3);
+  }
 
   const { accepted, reasons } = await regenerateMissingQuizzesIfNeeded(openai, {
     cleanedText,

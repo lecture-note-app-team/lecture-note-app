@@ -48,7 +48,9 @@ function getOpenAIClient() {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is missing");
   }
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // タイムアウトを明示的に設定：未設定だとSDKのデフォルト(10分)まで
+  // リクエストが「生成中…」のまま固まって見えるため、失敗を早く画面に返す。
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45_000, maxRetries: 1 });
 }
 
 // AIモデルを一箇所に集約（コスト管理・切り替えをここだけで完結させる）
@@ -57,6 +59,7 @@ const AI_MODELS = {
   quiz: process.env.OPENAI_QUIZ_MODEL || "gpt-4.1-mini",
   ocr: process.env.OPENAI_OCR_MODEL || "gpt-4.1-mini",
   mindmap: process.env.OPENAI_MINDMAP_MODEL || "gpt-4.1-mini",
+  grading: process.env.OPENAI_GRADING_MODEL || "gpt-4.1-mini",
 };
 
 const app = express();
@@ -514,7 +517,8 @@ async function generateQuizzesForNote(note, options = {}) {
   return generateQuizzesWithQualityPipeline({
     openai,
     note: noteWithQuizType,
-    targetCount: options.limit || 10,
+    // limit未指定なら、本文の内容量に応じてクイズ数を自動決定（1回の生成で本文を網羅する）
+    targetCount: options.limit || null,
     logger: console,
   });
 }
@@ -1189,12 +1193,18 @@ app.post("/api/notes", requireLogin, wrap(async (req, res) => {
   );
 
   // 復習通知：最初のリマインドを1日後に設定
-  await pool.query(
-    `INSERT INTO note_review_schedules (user_id, note_id, stage, next_review_at)
-     VALUES (?, ?, 0, DATE_ADD(NOW(), INTERVAL 1 DAY))
-     ON DUPLICATE KEY UPDATE next_review_at = VALUES(next_review_at)`,
-    [user_id, result.insertId]
-  );
+  // ★ここが失敗してもノート保存自体は成功させる（DBにマイグレーション未適用の環境でも
+  //   ノート本文が「保存できませんでした」と誤解されないようにするため）
+  try {
+    await pool.query(
+      `INSERT INTO note_review_schedules (user_id, note_id, stage, next_review_at)
+       VALUES (?, ?, 0, DATE_ADD(NOW(), INTERVAL 1 DAY))
+       ON DUPLICATE KEY UPDATE next_review_at = VALUES(next_review_at)`,
+      [user_id, result.insertId]
+    );
+  } catch (error) {
+    console.error("note_review_schedule_insert_failed", { noteId: result.insertId, error });
+  }
 
   res.status(201).json({ id: result.insertId, source_type: sourceType });
 }));
@@ -2083,6 +2093,7 @@ const PLAN_FEATURES = {
     quiz_creation_monthly_limit: -1,
     quiz_distractor_generation_monthly_limit: 200,
     ocr_extraction_monthly_limit: -1,
+    written_grading_monthly_limit: 200,
     max_custom_quizzes: -1,
     can_export_pdf: false,
   },
@@ -2093,6 +2104,7 @@ const PLAN_FEATURES = {
     quiz_creation_monthly_limit: -1,
     quiz_distractor_generation_monthly_limit: 200,
     ocr_extraction_monthly_limit: -1,
+    written_grading_monthly_limit: 200,
     max_custom_quizzes: -1,
     can_export_pdf: true,
   },
@@ -2555,7 +2567,7 @@ const handleGenerateQuiz = [
 
     let quizzes = [];
     try {
-      quizzes = await generateQuizzesForNote(note, { limit: 10, quizType: requestedQuizType });
+      quizzes = await generateQuizzesForNote(note, { quizType: requestedQuizType });
     } catch (err) {
       console.error("quiz_pipeline_failed", {
         noteId,
@@ -2863,6 +2875,86 @@ app.put("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
 
   res.json({ ok: true, id });
 }));
+
+// 記述問題の回答をAIが採点（完全一致ではなく意味的な正誤を判定）
+async function gradeWrittenAnswerWithAI({ question, correctAnswer, userAnswer }) {
+  const openai = getOpenAIClient();
+  const prompt = [
+    "あなたは講義ノートアプリの採点者です。次の記述問題への回答が、模範解答と意味的に一致しているかを判定してください。",
+    "条件:",
+    "- 表現の言い回しや語順の違い、表記ゆれ（漢字/かな、送り仮名、句読点など）は正解として許容する。",
+    "- 模範解答の要点（キーワード・因果関係・数値など）が欠けている場合は不正解とする。",
+    "- 出力はJSONのみ。形式は {\"correct\": true|false, \"feedback\": \"日本語で1〜2文の短い講評\"}",
+    "",
+    `【問題】${question}`,
+    `【模範解答】${correctAnswer}`,
+    `【回答者の解答】${userAnswer}`,
+  ].join("\n");
+
+  const resp = await openai.chat.completions.create({
+    model: AI_MODELS.grading,
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: "あなたは公正な採点者です。JSONのみ返答してください。" },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  const text = resp.choices?.[0]?.message?.content || "{}";
+  const parsed = JSON.parse(text);
+  return {
+    correct: parsed?.correct === true,
+    feedback: String(parsed?.feedback || "").slice(0, 400),
+  };
+}
+
+app.post(
+  "/api/quizzes/:id/grade",
+  requireLogin,
+  requireUsageLimit("written_grading", "written_grading_monthly_limit", "記述問題AI採点の月間利用上限（200回）に達しました。翌月にリセットされます。"),
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const userAnswer = String(req.body?.answer || "").trim();
+    if (!userAnswer) return res.status(400).json({ message: "answer は必須です" });
+
+    const [rows] = await pool.query(
+      "SELECT id, user_id, type AS quiz_type, question, answer AS correct_answer FROM note_quizzes WHERE id = ? LIMIT 1",
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ message: "not found" });
+    const quiz = rows[0];
+    if (quiz.user_id !== req.session.userId) return res.status(403).json({ message: "forbidden" });
+    if (quiz.quiz_type !== "written") {
+      return res.status(400).json({ message: "AI採点は記述問題（written）のみ対応しています" });
+    }
+
+    let result;
+    try {
+      result = await gradeWrittenAnswerWithAI({
+        question: quiz.question,
+        correctAnswer: quiz.correct_answer,
+        userAnswer,
+      });
+    } catch (error) {
+      console.error("grade_written_answer_failed", { id, error });
+      return res.status(502).json({ message: "AI採点に失敗しました。時間をおいて再試行してください。" });
+    }
+
+    await incrementUsageCount(req.session.userId, "written_grading", 1);
+    res.json({
+      ok: true,
+      correct: result.correct,
+      feedback: result.feedback,
+      correctAnswer: quiz.correct_answer,
+      usage: {
+        featureCode: "written_grading",
+        usedAfter: (req.usageLimit?.used || 0) + 1,
+        limit: req.usageLimit?.limit,
+      },
+    });
+  })
+);
 
 app.delete("/api/quizzes/:id", requireLogin, wrap(async (req, res) => {
   const id = Number(req.params.id);

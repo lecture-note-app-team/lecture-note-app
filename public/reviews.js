@@ -43,7 +43,11 @@
       <div id="reviewPanel" class="review-panel" hidden>
         ${count === 0
           ? `<div class="small">今のところ復習が必要なノートはありません。</div>`
-          : items.map((it) => `
+          : `
+            <div style="margin-bottom:8px;">
+              <a href="/review.html" class="button-link">▶ 復習を始める（${count}件）</a>
+            </div>
+          ` + items.map((it) => `
               <div class="review-item" data-review-note="${it.note_id}">
                 <div>
                   <div><strong>${esc(it.title || "(無題)")}</strong></div>
@@ -65,6 +69,11 @@
       const willOpen = panel.hidden;
       panel.hidden = !willOpen;
       btn.setAttribute("aria-expanded", String(willOpen));
+
+      // 通知の許可リクエストはユーザー操作（クリック）内で行う
+      if (typeof Notification !== "undefined" && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
     });
 
     container.querySelectorAll("button[data-review-done]").forEach((doneBtn) => {
@@ -82,6 +91,28 @@
     });
   }
 
+  // 通知の連打を防ぐため、最低でもこの間隔（ミリ秒）を空けてから再通知する
+  const NOTIFY_MIN_INTERVAL_MS = 60 * 60 * 1000; // 1時間
+
+  function maybeNotify(items) {
+    if (!items.length) return;
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "granted") return; // 許可は復習バッジのクリック時にリクエストする
+
+    const lastAt = Number(localStorage.getItem("reviewNotifyLastAt") || 0);
+    if (Date.now() - lastAt < NOTIFY_MIN_INTERVAL_MS) return;
+    localStorage.setItem("reviewNotifyLastAt", String(Date.now()));
+
+    const n = new Notification("🔔 復習の時間です", {
+      body: `復習が必要なノートが${items.length}件あります。タップして復習を始めましょう。`,
+      tag: "lecture-note-review",
+    });
+    n.onclick = () => {
+      window.focus();
+      location.href = "/review.html";
+    };
+  }
+
   async function load() {
     try {
       const me = await apiReviews("/api/me");
@@ -91,7 +122,9 @@
         return;
       }
       const data = await apiReviews("/api/reviews/due");
-      render(container, data.items || []);
+      const items = data.items || [];
+      render(container, items);
+      maybeNotify(items);
     } catch (e) {
       // 静かに失敗（通知は補助機能のため画面を壊さない）
       console.warn("review widget load failed:", e.message);

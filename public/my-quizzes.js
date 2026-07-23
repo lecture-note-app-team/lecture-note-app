@@ -255,8 +255,76 @@ function render(rows, options = {}) {
     });
   });
 
+  function wireNextButton(id) {
+    const nextBtn = document.querySelector(`button[data-next-quiz][data-next-quiz="${rows.findIndex((item) => String(item.id) === String(id))}"]`);
+    if (!nextBtn) return;
+    nextBtn.hidden = false;
+    nextBtn.onclick = () => {
+      const nextRow = rows[Number(nextBtn.dataset.nextQuiz) + 1];
+      if (!nextRow) {
+        nextBtn.textContent = "最後の問題です";
+        nextBtn.disabled = true;
+        return;
+      }
+      const targetBtn = document.querySelector(`button[data-answer-toggle="${nextRow.id}"]`);
+      if (targetBtn) {
+        targetBtn.click();
+        targetBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    };
+  }
+
+  function renderLocalResult(id, qz, userAnswer) {
+    const isCorrect = normalizeForAnswer(userAnswer) === normalizeForAnswer(qz.correct_answer);
+    const resultEl = document.querySelector(`[data-answer-result="${id}"]`);
+    if (resultEl) {
+      resultEl.classList.toggle("is-correct", isCorrect);
+      resultEl.classList.toggle("is-wrong", !isCorrect);
+      resultEl.innerHTML = `
+        <div><strong>${isCorrect ? "✅ 正解" : "❌ 不正解"}</strong></div>
+        <div>あなたの回答: ${esc(userAnswer)}</div>
+        <div>正解: ${esc(qz.correct_answer)}</div>
+        ${qz.explanation ? `<div>解説: ${esc(qz.explanation)}</div>` : ""}
+      `;
+    }
+    wireNextButton(id);
+  }
+
+  async function renderAiGradedResult(id, qz, userAnswer) {
+    const resultEl = document.querySelector(`[data-answer-result="${id}"]`);
+    if (resultEl) {
+      resultEl.classList.remove("is-correct", "is-wrong");
+      resultEl.innerHTML = `<div>AIが採点中です…</div>`;
+    }
+
+    try {
+      const result = await api(`/api/quizzes/${id}/grade`, {
+        method: "POST",
+        body: JSON.stringify({ answer: userAnswer }),
+      });
+      if (resultEl) {
+        resultEl.classList.toggle("is-correct", result.correct);
+        resultEl.classList.toggle("is-wrong", !result.correct);
+        resultEl.innerHTML = `
+          <div><strong>${result.correct ? "✅ 正解（AI判定）" : "❌ 不正解（AI判定）"}</strong></div>
+          <div>あなたの回答: ${esc(userAnswer)}</div>
+          <div>模範解答: ${esc(result.correctAnswer)}</div>
+          ${result.feedback ? `<div>AIの講評: ${esc(result.feedback)}</div>` : ""}
+        `;
+      }
+    } catch (e) {
+      // AI採点に失敗した場合は簡易な完全一致判定にフォールバック
+      if (resultEl) {
+        resultEl.innerHTML = `<div class="small">AI採点に失敗したため簡易判定を表示します（${esc(e.message)}）</div>`;
+      }
+      renderLocalResult(id, qz, userAnswer);
+      return;
+    }
+    wireNextButton(id);
+  }
+
   document.querySelectorAll("button[data-answer-submit]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const id = btn.dataset.answerSubmit;
       const qz = rows.find((item) => String(item.id) === String(id));
       if (!qz) return;
@@ -284,35 +352,12 @@ function render(rows, options = {}) {
         }
       }
 
-      const isCorrect = normalizeForAnswer(userAnswer) === normalizeForAnswer(qz.correct_answer);
-      const resultEl = document.querySelector(`[data-answer-result="${id}"]`);
-      const nextBtn = document.querySelector(`button[data-next-quiz][data-next-quiz="${rows.findIndex((item) => String(item.id) === String(id))}"]`);
-      if (resultEl) {
-        resultEl.classList.toggle("is-correct", isCorrect);
-        resultEl.classList.toggle("is-wrong", !isCorrect);
-        resultEl.innerHTML = `
-          <div><strong>${isCorrect ? "✅ 正解" : "❌ 不正解"}</strong></div>
-          <div>あなたの回答: ${esc(userAnswer)}</div>
-          <div>正解: ${esc(qz.correct_answer)}</div>
-          ${qz.explanation ? `<div>解説: ${esc(qz.explanation)}</div>` : ""}
-        `;
-      }
-
-      if (nextBtn) {
-        nextBtn.hidden = false;
-        nextBtn.onclick = () => {
-          const nextRow = rows[Number(nextBtn.dataset.nextQuiz) + 1];
-          if (!nextRow) {
-            nextBtn.textContent = "最後の問題です";
-            nextBtn.disabled = true;
-            return;
-          }
-          const targetBtn = document.querySelector(`button[data-answer-toggle="${nextRow.id}"]`);
-          if (targetBtn) {
-            targetBtn.click();
-            targetBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-          }
-        };
+      if (qz.quiz_type === "written") {
+        btn.disabled = true;
+        await renderAiGradedResult(id, qz, userAnswer);
+        btn.disabled = false;
+      } else {
+        renderLocalResult(id, qz, userAnswer);
       }
     });
   });
